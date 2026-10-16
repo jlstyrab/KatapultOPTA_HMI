@@ -291,6 +291,92 @@ matchar lösenordet mot nivå 3 → 2 → 1 (första träff ger nivån). Fel niv
 `401`. Fickpanelen: `losen <nivå> <nytt>` / `losen <nivå> standard`.
 Verktygsläget (USER 5 s) kör utan gate.
 
+## Förslag E3: scenen i Optans flash + "Skicka till Optan" (2026-10-16, för diskussion)
+
+Underlag (verifierat): bank 2 = 0x08100000–0x081FFFFF, 8 sektorer à 128 KB;
+M7-appen får inte passera `CM4_BINARY_START` (bank 1 slutar 0x08100000), en
+ev. M4-binär laddas från bankens BÖRJAN, persist tar de sista 256 KB
+(0x081C0000). FlashIAP finns (`program`/`erase`, sida 32 B, read-while-write
+över bankgräns). Heap: 431 KB total, 42 KB max använt. Storlekar: scener
+0,3–15 KB, bakgrunder ≤ 12 KB, gzip ≈ 4×. Plattformens API hämtar redan
+scener ur scada-containern (`KATAPULT_SCADA_URL`: `/scenes.json`,
+`/scenes/<id>.scene.json`, Lill-Berts ritverktyg) — `/backgrounds/<fil>`
+finns på samma server. Byggläget (`runtime/src/editor/host.ts`) har
+bootstrap-JWT mot plattformen.
+
+### A. Flashen (firmware: `hmi_store.h/.cpp`)
+
+| # | Förslag |
+|---|---|
+| A1 | **Ett paket, 256 KB** = bank 2 sektor 4–5 (0x08180000–0x081BFFFF), vägg i vägg med persist. 512 KB kvar i bankens början för en framtida M4-binär. Typiskt paket 10–20 KB gzippat → 10× marginal |
+| A2 | **Header sist = commit.** Första 256 B: magic `KHMI`, version, längd, CRC32, flaggor (gzip), namn (32 tecken), enhetsnamn (32), tidsstämpel. Data från +256 B. Headern skrivs efter CRC-kontroll av det som ligger i flashen, så en avbruten uppladdning lämnar "inget paket", aldrig ett halvt |
+| A3 | Ett slot i v1. A/B-slot (2 × 256 KB) om vi vill att ett misslyckat byte lämnar det gamla kortet kvar — plats finns |
+| A4 | Erase av 2 sektorer blockerar nätverkstråden ~2–4 s (Modbus-servern tyst så länge, scan-tråden opåverkad). Katapults poller kan logga en miss |
+
+### B. Optans API
+
+| # | Väg | Nivå | Innehåll |
+|---|---|---|---|
+| B1 | `GET /api/hmi/scene` | fri | paketet som det ligger: `Content-Type: application/json`, `Content-Encoding: gzip` när flaggan är satt, `Content-Length`; 404 utan paket |
+| B2 | `GET /api/hmi/info` | fri | `{present, bytes, crc, name, device, ts, gzip}`; samma fält som `hmi` i `/api/status` |
+| B3 | `POST /api/hmi/begin?token=&size=&crc=&gzip=1&name=&device=` | 2 | validerar storlek ≤ 256 KB−256, raderar sektorerna, går i läget "laddar" |
+| B4 | `POST /api/hmi/chunk?off=N&token=` | 2 | **rå binär body** ≤ 4096 B (inte String — nollbytes), programmeras i 32-B-sidor med svansbuffert; off måste vara nästa väntade |
+| B5 | `POST /api/hmi/end?token=` | 2 | CRC32 över flashen = begärd → header skrivs → `{ok, bytes, crc}`; annars `{ok:false, err:"crc"}` och inget paket |
+| B6 | `POST /api/hmi/clear?token=` | 2 | raderar headern (kortet borta) |
+| B7 | Routern delar `path` vid `?`; token läses ur body ELLER query (chunk-anrop har binär body). Gaten oförändrad i övrigt |
+
+Uppladdning av 20 KB = 5 chunkar ≈ 1 s + erase. 256 KB = 64 chunkar ≈ 10 s.
+
+### C. Paketformatet (gemensamt för Opta-lagring och APK)
+
+```json
+{ "schema": "katapult/opta-hmi/package@1",
+  "name": "Pannrum A", "device": "opta-testbank", "created": "2026-10-16T18:00:00Z",
+  "project": { "title": "Pannrum A", "scenes": [ { "id": "panna", "title": "Panna", "file": "scenes/panna.scene.json", "home": true } ] },
+  "files": { "scenes/panna.scene.json": "<text>", "backgrounds/panna.svg": "<text>" } }
+```
+
+Scenfilerna lagras oförändrade (bindningar, bakgrundssökväg relativ som i
+dag). Avsändaren gzippar; Optan lagrar bytes och sätter flaggan.
+
+### D. Runtimen (katapult-scada)
+
+| # | Förslag |
+|---|---|
+| D1 | Alla filhämtningar (`project.yaml`, `scenes/*`, bakgrunder) går via en **källa**: i Opta-läge hämtas `GET /api/hmi/scene` EN gång och filerna serveras ur paketet; `connection.optaDevice` = paketets `device`. Utan paket (404) → lokala filer som i dag (dev) eller meddelandet "Inget driftkort i Optan — skicka från byggläget" (APK) |
+| D2 | Omladdning (⟳ eller var 5:e min) jämför `info.crc` — nytt paket → ladda om scenen utan omstart |
+| D3 | `?opta=<värd>` räcker som URL: enhetsnamnet kommer ur paketet |
+
+### E. Plattformen (webbstyr-energy-platform) + pollern
+
+| # | Förslag |
+|---|---|
+| E1 | `POST /tenants/{t}/modbus/poll-devices/{id}/opta-hmi` `{scene_ids:[…], name?, password}`: hämtar `/scenes.json`, scenfilerna och deras bakgrunder ur scada-containern (samma väg som Lill-Berts ritverktyg), bygger paketet, gzip + base64 → Redis `opta_hmi_push` → väntar (≤ 60 s) → `{ok, bytes, crc}`. Loggas i `agent_commands` som `opta_hmi_push` |
+| E2 | Pollern (host-net): `opta_hmi_push` loggar in på Optan med teknikerlösenordet (nivå 2), kör begin/chunk/end, loggar ut; `opta_hmi_info` = GET info. Samma mönster som `opta_map` |
+| E3 | **Lösenordet lagras inte** i Katapult i v1 — det skrivs i dialogen vid varje sändning (teknikerhandling). Kolumn på enhetsraden kan komma senare |
+| E4 | `GET …/opta-hmi` → info (vad ligger i Optan nu) |
+
+### F. Byggläget
+
+| # | Förslag |
+|---|---|
+| F1 | Knapp **"Skicka till Optan…"** i byggläget (editor/media/main.js + host.ts-meddelande, plattforms-JWT finns): dialog med Opta-enhet (plattformens poll-enheter med model ≈ opta, förvald = den enhet scenens bindningar pekar på), scenlista med kryss (scener som binder mot enheten förkryssade, home/ordning följer project.yaml), paketnamn, teknikerlösenord → anrop → kvitto "12 384 B, crc 1a2b3c4d" |
+| F2 | Samma knapp som "Skicka driftkort till Optan…" i Modbus-vyn (Enheter → Modbus) bredvid "Hämta från Optan" — billig att lägga till, hjälper utan byggläge |
+
+### Ordning
+
+1. Firmware A+B (hmi_store, endpoints, routerns query-split) → test med curl/python: begin/chunk/end/CRC/404.
+2. Runtime D → dev-servern laddar paketet från bänk-Optan.
+3. Plattform E (API + poller) → `curl` mot API:t skickar bänkscenen.
+4. Byggläge F1 (+ F2).
+
+### Frågor till Johan
+
+- [ ] G1 256 KB i ett slot — eller A/B så ett misslyckat byte behåller gamla kortet?
+- [ ] G2 Teknikerlösenordet skrivs vid varje sändning (lagras inte) — OK för v1?
+- [ ] G3 Knappen i byggläget först, Modbus-vyn också?
+- [ ] G4 Omladdning i runtimen var 5:e min när paketet bytts — eller bara vid manuell omladdning?
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av
