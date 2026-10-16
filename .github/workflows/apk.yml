@@ -23,10 +23,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: SDK-komponenter
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+      # Runnern (ubuntu-latest) har Android-SDK:t förinstallerat i $ANDROID_HOME.
+      # android-actions/setup-android togs bort: den försöker installera det
+      # utgångna paketet "tools" och faller (2026-10-16).
+      - name: Android SDK (förinstallerat) — licenser + komponenter
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" >/dev/null
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
 
       - uses: gradle/actions/setup-gradle@v3
         with:
