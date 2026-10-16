@@ -208,6 +208,66 @@ avsändaren) men är den dummaste tänkbara larmvägen. Kräver SIM med SMS
 via platta (LTE-push, ingen firmware, billigast) eller via router (WG till
 navet, Optan nåbar, bäst täckning). Fristående oförändrat.
 
+## Förslag E2: inloggning + MANUAL-väg i firmwaren (2026-10-16, för diskussion)
+
+Underlag ur `optaModbusRemoteIO` (verifierat): mbed-kärnan har `mbedtls/sha256.h`
+och hårdvaru-RNG (`DEVICE_TRNG=1`, `hal/trng_api.h`); persist tar värden upp
+till 64 byte; teknikersidans ALLA anrop går genom en enda kö `optaFetch`
+(serialiserad, ett omförsök efter 400 ms — lwip har en enda ledig socket för
+inkommande); Modbus-coil 0–3 läses varje varv i `loop()` till
+`pd.manualCoils` → `outputRequest(DO, SourceId::MANUAL)` (`network.cpp:63`),
+och webbservern kör i samma `loop()`-tråd. `paramInt/paramStr` matchar
+nyckeln var som helst i bodyn (`"en="` träffar `"token="`) — måste rättas.
+
+### A. Inloggning
+
+| # | Del | Förslag |
+|---|---|---|
+| A1 | Lagring | `auth.pw` i persist = salt (8 B, TRNG) + SHA-256(salt‖lösenord) = 40 B. Inget lösenord satt → `auth:false` i `/api/status` → fritt läge som i dag. Satt → `auth:true` |
+| A2 | `POST /api/login` | `pass=…` (användarnamn ignoreras) → `{ok:true, token:<32 hex ur TRNG>, expires_in:600}`. Sessioner i RAM, max 4 (padda, tekniker-PC, reserv), äldsta kastas. Glidande livslängd: varje giltig skrivning förlänger; 10 min utan aktivitet → ogiltig. `POST /api/logout` |
+| A3 | Gate | När `auth` är på kräver ALLA POST utom `/api/login` giltigt `token` (formulärfält, D11). GET fri (D4). Fel → `401 {ok:false, err:"inloggning krävs"}` → klienten öppnar inloggningsrutan och gör om anropet. Modbus TCP berörs inte |
+| A4 | Spärr | Efter 3 misslyckade inloggningar 5 s spärr som dubblas upp till 60 s; brödsmula i svarta lådan |
+| A5 | Sätta/byta | `POST /api/password` `new=…` (+token när auth är på; tomt `new` tar bort). Teknikersidan får ett kort **Säkerhet** (sätt/byt/ta bort, visar 🔒/🔓) |
+| A6 | Glömt lösenord | Fysisk åtkomst = förtroende: fickpanelen (USB-C) får `losen <nytt>` / `losen av`; verktygsläget (USER 5 s, 192.168.200.1) kör UTAN auth; fabriksåterställning nollar |
+| A7 | Teknikersidan | `optaFetch` lägger på `token` ur `sessionStorage` på alla formulär-POST:ar; 401 → inloggningsruta → anropet görs om. Visa-läge fritt (D4) |
+| A8 | OptaClient | `fetchControlAuth` ← `status.auth`; `login` → `/api/login`; token går redan som formulärfält. Runtimens `LoginDialog` har användarnamnsfält — ignoreras |
+| A9 | Klonfil | Lösenordshashen följer INTE med klonfilen (som nätverksinställningen) |
+| A10 | Parsern | `paramInt/paramStr/paramFloat` matchar nyckel bara i bodyns början eller efter `&` |
+
+Lösenordet går i klartext över HTTP på kabeln: D4 säger skydd mot oavsiktlig
+ändring, inte kryptering. Challenge-response är inte värt det — `crypto.subtle`
+saknas i webbläsare på `http://192.168…` (osäker kontext).
+
+### B. MANUAL-väg för reläer
+
+| # | Del | Förslag |
+|---|---|---|
+| B1 | `POST /api/relay` | `i=0..3&state=0|1` → `modbusTCPServer.coilWrite(i, state)` från webbhandlern (samma tråd). Nästa Modbus-synk läser coilen → `manualCoils` → arbiterns MANUAL-källa. **Exakt Katapults coil-semantik**: OR-källa under skydd, nollas av safe state, hand trumfar. Katapult ser samma coil över Modbus — en sanning, två vägar |
+| B2 | `/api/status` | nytt fält `manual:[bool×4]` (coil-begäran) bredvid `relays` (faktiskt läge). Switch-symbolen binder `do{n}_status` (faktiskt) som i dag; `manual` blir taggen `do{n}_manual` i OptaClient |
+| B3 | Auth | kräver token som alla POST när auth är på |
+| B4 | Persistens | ingen, som coils (safe state nollar) |
+| B5 | OptaClient | `switchDevice(deviceId, kanal, state)` → `POST /api/relay i=kanal−1&state=` (kanal 1-baserad som Katapult). D12 stängs |
+| B6 | HMI-text | kolumnen "Drivs av" säger i dag "Modbus-coil från Katapult" för MANUAL — döps om till "manuell (HMI/Katapult)" |
+| B7 | Utanför | AO via MANUAL-källan (analog prioritet) — inte nu; hand-läget finns för AO |
+
+### C. Ordning och test
+
+1. **Steg 1 (liten, utan auth):** A10 parserfix + B1/B2 `/api/relay` + `manual` i status. Bänktest: relä via OptaClient från paddan, Katapults coil-skrivning oförändrad, safe state nollar.
+2. **Steg 2:** auth-modul (`auth.h/.cpp`: hash, token, sessioner, spärr, persist), gate i routern, `/api/login`, `/api/logout`, `/api/password`, `status.auth`, CLI `losen`, verktygsläge utan auth.
+3. **Steg 3:** teknikersidans inloggning (`optaFetch` + ruta + Säkerhet-kortet).
+4. **Steg 4:** OptaClient (A8, B5) + D4-flödet från paddan: visa fritt, ruta vid första Skriv, token hålls.
+
+Uppskattning: ~250 rader C++ (auth) + ~60 (relay/parser) + ~80 rader JS i HMI:t
++ ~30 rader i OptaClient. SHA-256 ur mbedTLS kostar några KB flash.
+
+### Frågor till Johan
+
+- [ ] F1 Sessionslängd: 10 min glidande (förlängs vid varje skrivning)?
+- [ ] F2 Ett lösenord för allt, eller två nivåer (operatör: börvärden/reläer/tidkanaler; tekniker: IO-typer, nätverk, block skapa/radera, fabriksåterställning)? Förslag: börja med ett, men låt token bära en nivå så två kan läggas till utan omtag.
+- [ ] F3 Lösenordet utanför klonfilen — OK?
+- [ ] F4 Verktygsläget (USER 5 s) utan inloggning som återställningsväg — OK?
+- [ ] F5 Flashning av bänk-Optan från den här PC:n: USB-C + `pio run -t upload`, eller flashar du?
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av
