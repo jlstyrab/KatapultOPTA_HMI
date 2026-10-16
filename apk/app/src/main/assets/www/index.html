@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>katapult-scada · runtime</title>
+    <style>
+      :root { color-scheme: dark; }
+      /* Ljust tema (?theme=light) måste även byta color-scheme — annars ritas
+         ev. rullningslister/formkontroller mörka på ljus sida. */
+      html:has(body.light) { color-scheme: light; }
+      /* overflow hidden: kioskapp — sidan ska aldrig scrolla. Subpixelspill
+         (t.ex. i embed-ramen) gav annars en mörk rullningslist längs kanten. */
+      html, body { margin: 0; height: 100%; background: #0e1116; color: #dbe2ea;
+        overflow: hidden; font-family: system-ui, sans-serif; }
+      #app { display: grid; grid-template-rows: auto 1fr; height: 100%; position: relative; }
+      /* Embed-läge (?embed=1): plattformen bäddar in oss i iframe och står för egen chrome.
+         OBS: dold header genererar ingen grid-rad → utan enradsmallen halkar
+         #stage upp i auto-raden och får höjd 0 (svart iframe). */
+      body.embed header { display: none; }
+      body.embed #app { grid-template-rows: 1fr; }
+      #scene-dots { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+        display: flex; gap: 8px; z-index: 20; padding: 7px 11px; border-radius: 999px;
+        background: #0e1116cc; }
+      #scene-dots[hidden] { display: none; }
+      #scene-dots button { width: 10px; height: 10px; border-radius: 50%; border: none; padding: 0;
+        background: #5b6675; cursor: pointer; }
+      #scene-dots button.active { background: #3b82f6; }
+      /* Skuggläge (?elev=1|2|3, main.ts sätter klassen): symboler och chips
+         lyfts ur bilden med drop-skugga. Variablerna ärvs genom shadow DOM in
+         i symbolerna (baseStyles i symbols/src/common.ts refererar dem) —
+         ingen klass = osatta variabler = exakt dagens platta utseende.
+         Rör/geometri får medvetet ingen skugga: objekten svävar ÖVER bilden,
+         rören ligger I den. 1=diskret, 2=normal, 3=kraftig. */
+      body.elev1 { --scada-elev: drop-shadow(0 1px 1.5px rgba(15,23,32,.28));
+        --scada-elev-chip: 0 1px 2px rgba(15,23,32,.2), 0 3px 6px rgba(15,23,32,.12); }
+      body.elev2 { --scada-elev: drop-shadow(0 2px 2px rgba(15,23,32,.3)) drop-shadow(0 6px 11px rgba(15,23,32,.22));
+        --scada-elev-chip: 0 2px 3px rgba(15,23,32,.25), 0 7px 16px rgba(15,23,32,.2); }
+      body.elev3 { --scada-elev: drop-shadow(0 3px 3px rgba(15,23,32,.38)) drop-shadow(0 12px 20px rgba(15,23,32,.32));
+        --scada-elev-chip: 0 3px 4px rgba(15,23,32,.3), 0 14px 28px rgba(15,23,32,.3); }
+      /* Aktivt plattformslarm som träffar symbolens zon/enhet → pulserande kontur. */
+      .alarmed { outline: 3px solid #e0533d; outline-offset: 4px; border-radius: 6px;
+        animation: alarmblink 1s steps(2, start) infinite; }
+      @keyframes alarmblink { 50% { outline-color: transparent; } }
+      header { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+        border-bottom: 1px solid #2a323d; font-size: 13px; }
+      #conn { display: inline-flex; align-items: center; gap: 6px; }
+      #dot { width: 9px; height: 9px; border-radius: 50%; background: #5b6675; }
+      #dot.up { background: #3ba55d; } #dot.down { background: #e0533d; }
+      #scene-nav, #building-nav { background: #161b22; color: #dbe2ea; border: 1px solid #2a323d; border-radius: 4px; padding: 2px 6px; font: inherit; }
+      #building-nav[hidden] { display: none; }
+      /* Scenytan är PROPORTIONSLÅST till scenens viewBox (JS sätter px-mått i
+         SceneRenderer.updateZoom) — bakgrunden dras aldrig ut, och symboler
+         dimensioneras i scenenheter (--symzoom). Det som byggs på PC:n ser
+         exakt likadant ut på padda/mobil, bara skalat. Ytan runt (wrap) är
+         vit som scenen så ev. marginaler smälter in. */
+      #stage-wrap { position: relative; overflow: hidden; min-height: 0; min-width: 0;
+        display: flex; align-items: center; justify-content: center; background: #fff; }
+      /* Karusellräls: tre wrap-stora slides (förra/aktuella/nästa scen) sida
+         vid sida; rälsen följer fingret (translateX i px, main.ts) och snappar.
+         Grannarna är FRUSNA förhandsrenderingar (tickas aldrig) — pointer-events
+         none så deras symboler aldrig kan klickas. #stage förblir det levande
+         elementet (PanZoom + renderer pekar på det). Ingen overflow på .slide:
+         inzoomad scen ska klippas av wrap, som förut. */
+      #rail { position: absolute; inset: 0; will-change: transform; }
+      .slide { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+      #slide-prev { transform: translateX(-100%); pointer-events: none; }
+      #slide-next { transform: translateX(100%); pointer-events: none; }
+      .stage-paper { position: relative; overflow: hidden; background: #fff; flex: none;
+        width: 100%; height: 100%; }
+      /* Mörkt tema (ingen ?theme=light): dämpad yta i stället för bländvit.
+         Symbolerna är ritade för ljus botten (svart stroke, vita chips) så
+         ytan hålls ljusgrå — helmörka driftkort kräver symbol-tema. */
+      body:not(.light) #stage-wrap, body:not(.light) .stage-paper { background: #b0b6bf; }
+      /* ?bg=clear (embed): plattformens bakgrundsbild ska skymta i letterboxen
+         runt scenen — hölje och letterbox blir genomskinliga, men scenpapperet
+         (#stage) behåller sin färg så driftkortet förblir läsbart. Klassen
+         sätts på <html>: html-elementets egen bakgrund (#0e1116) måste också
+         släckas, annars blir letterboxen svart i stället för genomskinlig. */
+      html.bgclear, html.bgclear body, html.bgclear #stage-wrap { background: transparent; }
+      /* Helskärm (⛶ i zoomknapparna; html.fs sätts av render/fullscreen.ts):
+         headern göms som i embed-läget, och letterboxen får temats botten i
+         stället för browserns svarta backdrop — även när plattformen bäddat
+         in oss med ?bg=clear (regeln står EFTER bgclear och vinner). */
+      html.fs header { display: none; }
+      html.fs #app { grid-template-rows: 1fr; }
+      html.fs, html.fs body, html.fs #stage-wrap { background: #0e1116; }
+      html.fs body.light, html.fs body.light #stage-wrap { background: #eef2f0; }
+      .stage-paper svg.bg { position: absolute; inset: 0; width: 100%; height: 100%; }
+      #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      .spacer { flex: 1; }
+      /* Fel visas som flytande toast — utanför headern så den syns även i
+         embed-läget (dold header). Trasig scen i iframe = besked, inte svart. */
+      #err { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 300;
+        max-width: 80vw; background: #241a10; color: #e0a200; border: 1px solid #5a4116;
+        border-radius: 8px; padding: 6px 14px; font-size: 13px; }
+      #err:empty { display: none; }
+      #to-platform { background: #161b22; color: #dbe2ea; border: 1px solid #2a323d;
+        border-radius: 4px; padding: 3px 10px; font: inherit; cursor: pointer; }
+      #to-platform:hover { border-color: #3d4856; background: #1c2430; }
+      #to-platform[hidden] { display: none; }
+      #edit-link { background: #161b22; color: #dbe2ea; border: 1px solid #2a323d;
+        border-radius: 4px; padding: 3px 10px; font: inherit; text-decoration: none; }
+      #edit-link:hover { border-color: #3d4856; background: #1c2430; }
+    </style>
+    <script type="module" crossorigin src="/assets/main-Dy_JynOp.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/charger-BraMWn37.js">
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <button id="to-platform" type="button" title="Tillbaka till plattformen (Alt+←)" hidden>⟵ Plattform</button>
+        <strong>katapult-scada</strong>
+        <select id="building-nav" title="Välj byggnad" hidden></select>
+        <select id="scene-nav" title="Välj scen"></select>
+        <span id="scene-title">—</span>
+        <span class="spacer"></span>
+        <a id="edit-link" href="/editor.html" title="Öppna scenen i byggläget (skrivning kräver token)">🔧 Byggläge</a>
+        <span id="conn"><span id="dot"></span><span id="conn-text">ansluter…</span></span>
+      </header>
+      <div id="err"></div>
+      <div id="stage-wrap">
+        <div id="rail">
+          <div class="slide" id="slide-prev"><div class="stage-paper" id="stage-prev"></div></div>
+          <div class="slide"><div class="stage-paper" id="stage">
+            <svg id="overlay" class="bg"></svg>
+          </div></div>
+          <div class="slide" id="slide-next"><div class="stage-paper" id="stage-next"></div></div>
+        </div>
+      </div>
+      <div id="scene-dots" hidden></div>
+    </div>
+  </body>
+</html>

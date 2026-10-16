@@ -443,12 +443,12 @@ Runtimens commit skrivs in i appens version (visas i inställningsdialogen).
 3. Direktkabel (E0): padda + USB-C-Ethernet-adapter, fast IP, Optan på 192.168.200.1 — upptäckt + bindning.
 4. Fäst appen, starta om paddan → autostart.
 
-### Frågor till Johan
+### Frågor till Johan — besvarade 2026-10-16 (D15)
 
-- [ ] H1 Byggväg: GitHub Actions (kräver push — vart: Luddetrutt eller jlstyrab-org, privat/publikt?) eller lokal verktygskedja (jag installerar JDK + SDK, ca 1 GB)?
-- [ ] H2 Inställningsdialogen via volym ned 3 s — OK? (Back-knappen är blockerad i fäst läge.)
-- [ ] H3 Orientering: följ plattan, eller låst liggande som standard?
-- [ ] H4 Installation på paddan under test: nedladdning från en länk (enklast) eller adb över Wi-Fi (kräver utvecklarläge + parning)?
+- [x] H1 **GitHub Actions**; repot publikt under **jlstyrab-org** (MIT, som de öppna kundprojekten) — APK:n laddas ner från GitHub Releases.
+- [x] H2 Inställningsdialog via volym ned 3 s. **OK.**
+- [x] H3 Orientering **följer plattan**.
+- [x] H4 Installation via **nedladdningslänk**.
 
 ## Övervakning: "Opta-ping"
 
