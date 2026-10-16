@@ -1,7 +1,9 @@
 # KatapultOPTA_HMI — designlogg
 
-**Status:** etapp E1 byggd och bänkverifierad 2026-10-16 (katapult-scada, OptaClient).
-Resten är idéfas. Senast uppdaterad 2026-10-16.
+**Status:** E1 (OptaClient), E2 (inloggning + MANUAL-relä i firmwaren) och E3
+(driftkortspaketet i Optans flash + "Skicka till Optan") byggda och verifierade
+2026-10-16, E3 end-to-end via Pi5:s byggläge → plattform → poller → bänk-Opta →
+runtime. Kvar: E4 APK, E5/E6 uppkoppling + Opta-ping. Senast uppdaterad 2026-10-16.
 Dokumentet är den levande sanningen för spåret: beslut spikas här med datum,
 öppna frågor står kvar tills de är stängda, parkerade idéer glöms inte.
 
@@ -117,6 +119,17 @@ Kollade i koden 2026-10-15/16. Ändras de, ändras designen.
   connect job) som tar en extra socket. Mät igen från APK:ns WebView och utan
   plattformens poller.
 - Scenkoordinater `x`/`y` är objektets **centrum**, inte hörnet.
+- **Bygglägets knapp verifierad 2026-10-16** från Pi5:s mux
+  (`http://192.168.1.109:10000/editor.html?scene=hyst-test`): enhetslista med
+  Opta testbänk förvald (ur scenens bindningar), andra enheter märkta "saknar
+  lösenord", Skicka → "Klart: 789 B (2319 B okomprimerat) i slot B, seq 4,
+  3,3 s". Claudes webbläsarpanel blockerar anrop från :8085 till :8000
+  (ERR_BLOCKED_BY_CLIENT, panelens egen policy) — testa byggläget via muxen
+  (:10000, samma origin) eller i vanlig Chrome.
+- Scenen `hyst-test` på Pi5 binder `opta-testbank.reg1_*` som inte finns i
+  OptaClientens namn (blocket heter `rad1_regulator`) — faceplaten visar blankt
+  för de raderna; `kurva1_*` fungerar. Rita om kortet mot rätt prefix när det
+  blir skarpt.
 - **Faceplate-kortet håller raden efter Skriv** tills readbacken kommit (max
   20 s) och ignorerar nya klick under tiden; simulerad `input`-event räcker
   inte alltid. Två "misslyckade" återställningar under E2-testet var det, inte
@@ -370,12 +383,12 @@ dag). Avsändaren gzippar; Optan lagrar bytes och sätter flaggan.
 3. Plattform E (API + poller) → `curl` mot API:t skickar bänkscenen.
 4. Byggläge F1 (+ F2).
 
-### Frågor till Johan
+### Frågor till Johan — besvarade 2026-10-16 (D14)
 
-- [ ] G1 256 KB i ett slot — eller A/B så ett misslyckat byte behåller gamla kortet?
-- [ ] G2 Teknikerlösenordet skrivs vid varje sändning (lagras inte) — OK för v1?
-- [ ] G3 Knappen i byggläget först, Modbus-vyn också?
-- [ ] G4 Omladdning i runtimen var 5:e min när paketet bytts — eller bara vid manuell omladdning?
+- [x] G1 **A/B-slot**: två slot à 256 KB (bank 2 sektor 2–3 = 0x08140000 och 4–5 = 0x08180000), 256 KB kvar i bankens början för M4. Headern bär ett sekvensnummer; aktivt slot = giltig header med högst nummer; uppladdning går alltid till det inaktiva slottet. Ett misslyckat byte lämnar det gamla kortet orört.
+- [x] G2 **Lösenordet lagras ordentligt från början**: kolumn på Opta-enhetens rad i `modbus_poll_devices`, sätts i Enheter → Modbus (maskerat, visas aldrig igen), krypterat i vila med plattformens hemlighet, används bara av pollern. Dialogen i byggläget frågar inte efter det.
+- [x] G3 Knappen **bara i byggläget**.
+- [x] G4 **Båda**: runtimen kollar `/api/hmi/info` var 5:e minut och laddar om vid ny CRC, och manuell omladdning fungerar som vanligt.
 
 ## Övervakning: "Opta-ping"
 
@@ -446,7 +459,7 @@ Scenen hämtas från Optan.
 | E0 | Bänktest: direktkabel padda–Opta med fast IP; laddning i värdläge; lokalt serverad sida pollar och skriver mot bänk-Optan från annan origin; Ethernet + LTE samtidigt | — |
 | E1 | **KLAR 2026-10-16** (katapult-scada: `runtime/src/client/OptaClient.ts` + `ScadaClient.ts`, val i `main.ts`, `connection.opta` i project.yaml). Bänkverifierat i webbläsare mot 192.168.1.117: kortet live, börvärde 21,5 skrivet via faceplatens Skriv och läst tillbaka ur `/api/fb`, kurvpunkt skriven via kurvkortet och läst ur `/api/curves`, tidkanalsymbolen visar kanal 0:s schema. Testscen: `scenes-test/` i detta repo; dev-server = launch-posten `scada-opta` (SCENES_DIR → scenes-test, `--host 0.0.0.0`, port 5279). Kvar i E1: statiskt paket (vite build + mapp) i stället för dev-server | katapult-scada |
 | E2 | **KLAR 2026-10-16** (optaModbusRemoteIO: `auth.h/.cpp`, gate + `/api/login|logout|password|relay` i `web_server.cpp`, `modbusSetManualCoil`, CLI `losen`, parserfix; teknikersidan: token i `optaFetch`, inloggningsruta, Säkerhet-kort, 🔒/🔓-pill; docs + CLAUDE.md). Flashad på bänk-Optan (498 500 B). 27 API-kontroller gröna (`scratchpad/e2_test.py`): nivåer, 401/403/429, relä via MANUAL (R3 slog fysiskt), parserfix, lösenordsbyte, spärr. Tokentest: 7 skrivningar/2 min på en token, 34–131 ms. Runtime: `switchDevice` → `/api/relay`, Opta-fel visas i klartext, cachad token släpps vid "inloggning krävs"; D4-flödet verifierat i webbläsare (ruta vid Skriv → 1111 → skrivning → token 10 min). D12 stängd | optaModbusRemoteIO + katapult-scada |
-| E3 | Scenblob i flash + `GET/POST /api/hmi/scene`; "Skicka till Optan" i byggläget via pollern | optaModbusRemoteIO + webbstyr-energy-platform + katapult-scada |
+| E3 | **BYGGD 2026-10-16**, fyra lager: (1) firmware `hmi_store.h/.cpp` (A/B-slot à 256 KB, header sist, CRC32) + `GET /api/hmi/scene|info`, `POST begin/chunk/end/clear` (nivå 2, binär chunk-body, path/query-split) — bänktest `scratchpad/e3_upload.py`: upp/läs tillbaka byte för byte, A/B-byte seq+1, CRC-fel lämnar gamla, 401, clear → 404 (optaModbusRemoteIO 41cf27a); (2) runtime: paketkälla (`resolveProject`/`readFile`), Optans paket vinner över lokala filer, `?pkg=local`, omladdning vid ny CRC var 5:e min — verifierat: dev-servern renderar kortet ur Optans flash (katapult-scada 94741e7); (3) plattform: `api/opta_hmi.py` bygger paketet ur scada-containern, `POST/GET …/poll-devices/{id}/opta-hmi`, pollern `opta_hmi_push` (login nivå 2, begin/chunk/end med omförsök + offset-skydd), migration 047 `http_password` krypterat (`api/secretbox.py`), 🔑 i Modbus-vyn (2acfe09); (4) byggläget: "⇪ Skicka till Optan…" med dialog (host.ts + editor/media/main.js). **E2E KLAR 2026-10-16 via Pi5:** lösenord satt på opta-testbank via API:t (PATCH http_password), `POST …/opta-hmi {scene_ids:["hyst-test"]}` → paket 2305 B rå / 797 B gz, upp på 2,9 s, slot A seq 3, audit-rad `opta_hmi_push` status sent; runtimen med bara `?opta=192.168.1.117` laddade "Hysteres-test (Opta)" ur Optan med kurvkortet live. Deploy: plattform 2acfe09 + migration 047 på Pi5 (api, poller, frontend), scada via bundle scada-20261016a | alla tre + KatapultOPTA_HMI |
 | E4 | APK: WebView-skal, assets, UDP-upptäckt, lock task, skärm på, inloggning, nätbindning | detta repo |
 | E5 | Uppkopplad via platta: status-push över HTTPS + push-endpoint i Katapult med offline-larm (väg B) | detta repo + webbstyr-energy-platform |
 | E6 | Uppkopplad via router: nätläge i Optans HMI + heartbeat (A) + lyssnare | optaModbusRemoteIO + katapult-stack (nav) |
