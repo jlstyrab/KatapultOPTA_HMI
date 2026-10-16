@@ -390,6 +390,66 @@ dag). Avsändaren gzippar; Optan lagrar bytes och sätter flaggan.
 - [x] G3 Knappen **bara i byggläget**.
 - [x] G4 **Båda**: runtimen kollar `/api/hmi/info` var 5:e minut och laddar om vid ny CRC, och manuell omladdning fungerar som vanligt.
 
+## Förslag E4: APK:n (2026-10-16, för diskussion)
+
+Inventering av PC:n 2026-10-16: **ingen Android-verktygskedja** — inget SDK,
+inget JDK, ingen Android Studio, inget adb, inget Gradle. `winget` finns.
+Kandidatplattan (Lenovo Tab One, Android 14) har WebView ≥ 2021 → runtimens
+ES2022-bundle går. Runtimens dist = `index.html` + `assets/*.js|css` med
+absoluta `/assets/…`-sökvägar.
+
+### A. Byggväg — två alternativ
+
+| | A1 Lokalt på PC:n | A2 GitHub Actions |
+|---|---|---|
+| Kräver | JDK 17 (Temurin) + Android cmdline-tools, platform-tools, build-tools, platform 34 via `sdkmanager` — ca 1 GB nedladdning, 10–15 min, kan göras headless med winget/zip | repot `KatapultOPTA_HMI` pushat till GitHub (org + synlighet ej valt än) |
+| Bygget | `gradlew assembleDebug` på PC:n, ~1 min efter första gången | ubuntu-runnern har SDK förinstallerat; workflow bygger vid push och lägger APK:n som artefakt/release, ~3 min |
+| Plattan hämtar | via fil/adb från PC:n | **direkt från GitHub Releases** — "ladda ner appen från min github" (Johans ord) |
+| Underhåll | verktygskedja att hålla vid liv på PC:n | inget lokalt; bygget är reproducerbart |
+
+Förslag: **A2 som huvudväg** (kräver push), A1 som tillval om Johan vill bygga
+offline. Båda kan finnas: samma Gradle-projekt.
+
+### B. Appen (Kotlin, inga bibliotek)
+
+| # | Del | Förslag |
+|---|---|---|
+| B1 | Skal | en `Activity` med `WebView`, **ingen AndroidX** (principen "inga bibliotek"). Runtimen ligger som assets |
+| B2 | Servering | en **lokal HTTP-server** i appen (ServerSocket på 127.0.0.1, slumpad port, ~80 rader) serverar assets. Origin blir `http://127.0.0.1:port` → absoluta `/assets`-sökvägar fungerar, inget blandat innehåll (Optan är http), `localStorage` (token-cachen) består. Inga avvecklade `file://`-flaggor, ingen `WebViewAssetLoader` |
+| B3 | Start-URL | `http://127.0.0.1:port/?opta=<ip>` — resten (paket, enhetsnamn, scener) kommer ur Optan (E3). Utan paket visar runtimen "Inget driftkort i Optan" |
+| B4 | UDP-upptäckt | broadcast `KATAPULT_DISCOVER_v1` till port 5000 på varje nätverk (Ethernet först, sedan Wi-Fi), multicast-lås, svar = JSON med `id`, `name`, `ip`. En träff → använd; flera → nativ lista; ingen → IP-dialog förifylld med senaste eller 192.168.200.1 (fallback). Sparas i SharedPreferences |
+| B5 | Nätbindning | upptäckten körs per nätverk (`Network.bindSocket`), och appen binder processen (`bindProcessToNetwork`) till nätverket där Optan svarade, så WebView-trafiken går dit även när Android lagt standardrutten på LTE/Wi-Fi. Nätverkslyssnare: tappas nätet → ny upptäckt |
+| B6 | Kiosk | `startLockTask()` (app-fästning; med device owner via `adb shell dpm set-device-owner` blir det äkta kiosk utan utväg), skärmen alltid på, immersive helskärm, `BOOT_COMPLETED` → autostart efter strömavbrott, HOME-kategori så appen kan väljas som startskärm |
+| B7 | Inställningar | nativ dialog (Opta-IP, Sök igen, orientering, kiosk av/på, version): öppnas med **volym ned hållen 3 s** (fungerar även fäst) |
+| B8 | Robusthet | sidfel i WebView → omladdning efter 5 s; runtimen sköter själv Optans RST och omladdning vid nytt paket (E3). Inga uppdateringar i drift — ny APK = ny version |
+| B9 | Behörigheter | INTERNET, ACCESS_NETWORK_STATE, ACCESS_WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE, RECEIVE_BOOT_COMPLETED. minSdk 26, target 34 |
+| B10 | Signering | debug-nyckel för testerna; release-keystore skapas av Johan och läggs som hemlighet i GitHub (A2) eller lokalt (A1) |
+
+### C. Repo-layout (KatapultOPTA_HMI)
+
+```
+apk/                 Gradle-projekt (settings, app/, wrapper)
+apk/app/src/main/assets/www/   runtimens dist (synkas av tools/sync-runtime.sh ur ~/katapult-scada/runtime/dist)
+.github/workflows/apk.yml      bygger assembleDebug (och release vid tagg) → artefakt/release
+tools/sync-runtime.sh          vite build i scada-repot + kopiera index.html + assets/
+```
+
+Runtimens commit skrivs in i appens version (visas i inställningsdialogen).
+
+### D. Test
+
+1. Bygg APK (A1 eller A2) → installera på Lenovo-paddan ("okända källor") via nedladdning från GitHub/PC.
+2. Paddan på samma nät som bänk-Optan: upptäckt hittar 192.168.1.117 → hyst-test ur Optans flash → D4-flödet (Skriv → 1111).
+3. Direktkabel (E0): padda + USB-C-Ethernet-adapter, fast IP, Optan på 192.168.200.1 — upptäckt + bindning.
+4. Fäst appen, starta om paddan → autostart.
+
+### Frågor till Johan
+
+- [ ] H1 Byggväg: GitHub Actions (kräver push — vart: Luddetrutt eller jlstyrab-org, privat/publikt?) eller lokal verktygskedja (jag installerar JDK + SDK, ca 1 GB)?
+- [ ] H2 Inställningsdialogen via volym ned 3 s — OK? (Back-knappen är blockerad i fäst läge.)
+- [ ] H3 Orientering: följ plattan, eller låst liggande som standard?
+- [ ] H4 Installation på paddan under test: nedladdning från en länk (enklast) eller adb över Wi-Fi (kräver utvecklarläge + parning)?
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av
