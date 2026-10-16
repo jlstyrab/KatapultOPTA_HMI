@@ -1,0 +1,27 @@
+schema: katapult/scada/project@1
+title: Bänk-Opta (direkt, utan plattform)
+
+# KatapultOPTA_HMI etapp E1: runtimen kör OptaClient direkt mot PLC:n.
+# ?opta=<värd> och ?device=<namn> i URL:en överstyr raderna nedan.
+connection:
+  opta: 192.168.1.117
+  optaDevice: opta-testbank
+
+# Pollningsbudget mot Optan: ett varv (status + block) var 3:e sekund.
+opta:
+  pollMs: 3000
+
+quality:
+  staleAfterSeconds:
+    modbus: 30
+    default: 30
+  heartbeatTimeoutSeconds: 70
+  treatUncalibratedAs: good
+
+scenes:
+  - id: opta-bank
+    title: Bänk-Opta
+    file: scenes/opta-bank.scene.json
+    home: true
+    pin: true
+    order: 1

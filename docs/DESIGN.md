@@ -1,6 +1,7 @@
 # KatapultOPTA_HMI — designlogg
 
-**Status:** idéfas, inget byggt. Senast uppdaterad 2026-10-16.
+**Status:** etapp E1 byggd och bänkverifierad 2026-10-16 (katapult-scada, OptaClient).
+Resten är idéfas. Senast uppdaterad 2026-10-16.
 Dokumentet är den levande sanningen för spåret: beslut spikas här med datum,
 öppna frågor står kvar tills de är stängda, parkerade idéer glöms inte.
 
@@ -69,6 +70,9 @@ i ett projekt.
 | D6 | 2026-10-16 | **Förslag, ej spikat:** Ethernet för både padda och uppkoppling; USB avvisas | Se analysen nedan |
 | D7 | 2026-10-16 | **Förslag, ej spikat:** nätläge väljs vid driftsättning i Optans HMI: *Fristående* (direktkabel, fallback-IP) eller *Uppkopplad* | Ett val, inte två produkter |
 | D8 | — | **Öppet:** Opta-ping, se avsnittet Övervakning | |
+| D10 | 2026-10-16 | Taggnamn direkt mot Optan = Katapults importkonvention: `slug(blocknamn)_pv/_out/_status/_alarm` + parameternycklarna ur `/api/modbus-map`, kurvpunkter `_x1…_y6` + `_npts`, reläer `do{n}_status`, tidkanaler `tidkanal{i}_status` (Optans index 0–7), övrig I/O = Optans namn i gemener (`ai_1`, `pt1000`, `ext_ai_1`, `vai_2`, `di_1`, `ao_1`) | En scen ritad mot plattformens Opta-enhet körs oförändrad direkt mot PLC:n; enhetsnamnet är konfigurerbart (`?device=`, `connection.optaDevice`) så det kan vara samma som plattformens device_id |
+| D11 | 2026-10-16 | Styr-token skickas som formulärfält `token` på skrivningar, inte i `Authorization`-huvud | Formulär-POST är en "simple request" utan CORS-preflight; firmwaren slipper OPTIONS. Stänger den öppna frågan |
+| D12 | 2026-10-16 | Reläer styrs INTE via HTTP förrän firmwaren har en väg för MANUAL-källan (samma semantik som Modbus-coil 0–3). OptaClient.switchDevice avvisar med tydligt fel | Enda HTTP-vägen i dag är hand-läget, som trumfar skydd — fel verktyg för en operatörspanel. Firmwaretillägg i E2 |
 | D9 | 2026-10-16 | **Förslag, ej spikat:** *Uppkopplad* finns i två varianter — **via platta** (LTE-platta pushar status över HTTPS, ingen firmware) eller **via router** (4G-router med WireGuard till navet, Optan nåbar som en nod) — valet görs per anläggning | Plattan är billigast och räcker för fjärrinsyn; routern vinner där täckningen i skåpet är dålig eller Optan ska nås direkt. Se analysen "LTE-platta som upplänk" |
 
 ## Verifierade fakta som designen vilar på
@@ -105,6 +109,14 @@ Kollade i koden 2026-10-15/16. Ändras de, ändras designen.
   **två gånger per dygn + tio minuter efter omstart** via POST `/report`
   (WireGuard, port 8090); läge **TYST efter 26 h** (två uteblivna), **ALDRIG
   HÖRD** om vakten saknas. Johan: ett par kontroller per dygn räcker.
+- **RST-frekvensen i praktiken (bänk, 2026-10-16):** med Pi5:s poller igång
+  mot samma Opta och runtimen pollande 2–3 anrop var 3:e sekund från Chrome
+  fick ungefär vart fjärde anrop `ERR_CONNECTION_RESET`. Omförsöken i
+  OptaClient (3 försök, 400 ms-stegrad paus) döljer det helt; ett enskilt
+  anrop tar 50–180 ms. Misstänkt bidrag: Chromes reservanslutning (backup
+  connect job) som tar en extra socket. Mät igen från APK:ns WebView och utan
+  plattformens poller.
+- Scenkoordinater `x`/`y` är objektets **centrum**, inte hörnet.
 - Kandidatplatta **Lenovo Tab One 8,7" LTE** (NetOnNet art. 1055915, MPN
   ZAF10175SE, 2 290 kr 2026-10-16, laddare ingår inte): Android 14 eller
   senare, MediaTek Helio G85, 4 GB RAM, 64 GB eMMC, 8,7" IPS 1340×800 480 nits,
@@ -247,7 +259,9 @@ Scenen hämtas från Optan.
 - [ ] Auto-MDIX i Optans PHY — rak kabel direkt till plattan? Bänktest.
 - [ ] Klockan vid strömavbrott utan NTP (fristående anläggning med tidkanaler). Uppkopplad via platta: appen kan sätta Optans klocka från plattans.
 - [ ] Flashutrymme för scenblob i bank 2 — verifiera mot linkerscript; sektorstorlek 128 KB.
-- [ ] Token i `Authorization`-huvud (kräver OPTIONS) eller som formulärfält?
+- [x] Token i `Authorization`-huvud eller som formulärfält? → formulärfält (D11, 2026-10-16).
+- [ ] Enheter på analoga ingångar: `/api/io` ger `itype` men ingen enhet; OptaClient sätter bara °C på PT1000. Mappa itype → enhet när typtabellen är känd.
+- [ ] Larmöverlägg (symbolblink) direkt mot Optan: blocklarm och systemflaggor finns som taggar, men AlarmRegister matas inte. Syntetiska alarm-frames ur pollningen, eller låta symbolerna binda `_alarm`-taggen.
 - [ ] Hur länge inloggningen hålls efter sista tryck (förslag: 5–10 min inaktivitet, så en lämnad panel inte står armerad; scadan styr i dag med `ui_session_minutes`).
 - [ ] Lägsta WebView-version vi stöder; sänka byggmålet från ES2022?
 - [ ] Push-endpoint i Katapult: HTTP POST med nyckel eller MQTT över TLS? Enhetstyp "opta via platta" med offline-larm.
@@ -261,7 +275,7 @@ Scenen hämtas från Optan.
 | Etapp | Innehåll | Repo |
 |---|---|---|
 | E0 | Bänktest: direktkabel padda–Opta med fast IP; laddning i värdläge; lokalt serverad sida pollar och skriver mot bänk-Optan från annan origin; Ethernet + LTE samtidigt | — |
-| E1 | OptaClient i runtimen + statiskt paket; scen bunden till Optans taggnamn (samma konvention som Katapults import: `pid1_sp`) | katapult-scada |
+| E1 | **KLAR 2026-10-16** (katapult-scada: `runtime/src/client/OptaClient.ts` + `ScadaClient.ts`, val i `main.ts`, `connection.opta` i project.yaml). Bänkverifierat i webbläsare mot 192.168.1.117: kortet live, börvärde 21,5 skrivet via faceplatens Skriv och läst tillbaka ur `/api/fb`, kurvpunkt skriven via kurvkortet och läst ur `/api/curves`, tidkanalsymbolen visar kanal 0:s schema. Testscen: `scenes-test/` i detta repo; dev-server = launch-posten `scada-opta` (SCENES_DIR → scenes-test, `--host 0.0.0.0`, port 5279). Kvar i E1: statiskt paket (vite build + mapp) i stället för dev-server | katapult-scada |
 | E2 | Inloggning i firmwaren (lösenord i persist, `POST /api/login` → kortlivad token, skrivning kräver token, teknikersidan får inloggning) | optaModbusRemoteIO |
 | E3 | Scenblob i flash + `GET/POST /api/hmi/scene`; "Skicka till Optan" i byggläget via pollern | optaModbusRemoteIO + webbstyr-energy-platform + katapult-scada |
 | E4 | APK: WebView-skal, assets, UDP-upptäckt, lock task, skärm på, inloggning, nätbindning | detta repo |

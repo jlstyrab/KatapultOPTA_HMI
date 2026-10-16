@@ -1,0 +1,74 @@
+{
+  "schema": "katapult/scada/scene@1",
+  "id": "opta-bank",
+  "title": "Bänk-Opta (direkt)",
+  "background": {
+    "svg": "../backgrounds/blank-800x400.svg",
+    "viewBox": "0 0 800 400"
+  },
+  "canvas": { "grid": 20, "snap": true },
+  "entities": [
+    {
+      "id": "reg1",
+      "type": "faceplate",
+      "x": 190,
+      "y": 200,
+      "props": { "w": 300, "h": 300, "label": "RAD1 Regulator (bänk)" },
+      "bind": {
+        "value": "opta-testbank.rad1_regulator_pv",
+        "sp": "opta-testbank.rad1_regulator_sp",
+        "out": "opta-testbank.rad1_regulator_out",
+        "alarm": "opta-testbank.rad1_regulator_alarm"
+      }
+    },
+    {
+      "id": "kurva1",
+      "type": "curve",
+      "x": 500,
+      "y": 200,
+      "props": { "w": 280, "h": 320, "label": "Kurva1 (VAI_2 → RT_KURVA_1)", "xLabel": "Utetemp", "yLabel": "Framledning" },
+      "bind": {
+        "value": "opta-testbank.kurva1_pv",
+        "out": "opta-testbank.kurva1_out",
+        "alarm": "opta-testbank.kurva1_alarm",
+        "npts": "opta-testbank.kurva1_npts",
+        "x1": "opta-testbank.kurva1_x1", "y1": "opta-testbank.kurva1_y1",
+        "x2": "opta-testbank.kurva1_x2", "y2": "opta-testbank.kurva1_y2",
+        "x3": "opta-testbank.kurva1_x3", "y3": "opta-testbank.kurva1_y3",
+        "x4": "opta-testbank.kurva1_x4", "y4": "opta-testbank.kurva1_y4"
+      }
+    },
+    {
+      "id": "ute",
+      "type": "value-readout",
+      "x": 680,
+      "y": 60,
+      "bind": { "value": "opta-testbank.ext_ai_1" },
+      "props": { "label": "A0602 AI1", "decimals": 1 }
+    },
+    {
+      "id": "vai2",
+      "type": "value-readout",
+      "x": 680,
+      "y": 130,
+      "bind": { "value": "opta-testbank.vai_2" },
+      "props": { "label": "VAI_2 (simulerad ute)", "decimals": 1 }
+    },
+    {
+      "id": "klocka",
+      "type": "value-readout",
+      "x": 680,
+      "y": 200,
+      "bind": { "value": "opta-testbank.sys_time" },
+      "props": { "label": "PLC-klocka" }
+    },
+    {
+      "id": "tk0",
+      "type": "timechannel",
+      "x": 720,
+      "y": 320,
+      "bind": { "state": "opta-testbank.tidkanal0_status" },
+      "props": { "label": "Tidkanal 1" }
+    }
+  ]
+}
