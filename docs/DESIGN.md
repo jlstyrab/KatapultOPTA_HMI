@@ -117,6 +117,15 @@ Kollade i koden 2026-10-15/16. Ändras de, ändras designen.
   connect job) som tar en extra socket. Mät igen från APK:ns WebView och utan
   plattformens poller.
 - Scenkoordinater `x`/`y` är objektets **centrum**, inte hörnet.
+- **Faceplate-kortet håller raden efter Skriv** tills readbacken kommit (max
+  20 s) och ignorerar nya klick under tiden; simulerad `input`-event räcker
+  inte alltid. Två "misslyckade" återställningar under E2-testet var det, inte
+  auth-vägen — instrumenterad fetch visade identisk POST med `200 {ok:true}`.
+  Testa skrivflöden med riktiga klick på paddan.
+- **Teknikersidan öppen samtidigt** som runtimen gav hängande POST:ar (en
+  ledig socket) — bekräftar principen "en klient i taget".
+- Flashning fungerar från den här PC:n: `pio run -t upload --upload-port COM4`
+  (Opta = USB VID 2341:0164), ca 11 s via DFU. persist (bank 2) överlever.
 - Kandidatplatta **Lenovo Tab One 8,7" LTE** (NetOnNet art. 1055915, MPN
   ZAF10175SE, 2 290 kr 2026-10-16, laddare ingår inte): Android 14 eller
   senare, MediaTek Helio G85, 4 GB RAM, 64 GB eMMC, 8,7" IPS 1340×800 480 nits,
@@ -260,13 +269,27 @@ saknas i webbläsare på `http://192.168…` (osäker kontext).
 Uppskattning: ~250 rader C++ (auth) + ~60 (relay/parser) + ~80 rader JS i HMI:t
 + ~30 rader i OptaClient. SHA-256 ur mbedTLS kostar några KB flash.
 
-### Frågor till Johan
+### Frågor till Johan — besvarade 2026-10-16
 
-- [ ] F1 Sessionslängd: 10 min glidande (förlängs vid varje skrivning)?
-- [ ] F2 Ett lösenord för allt, eller två nivåer (operatör: börvärden/reläer/tidkanaler; tekniker: IO-typer, nätverk, block skapa/radera, fabriksåterställning)? Förslag: börja med ett, men låt token bära en nivå så två kan läggas till utan omtag.
-- [ ] F3 Lösenordet utanför klonfilen — OK?
-- [ ] F4 Verktygsläget (USER 5 s) utan inloggning som återställningsväg — OK?
-- [ ] F5 Flashning av bänk-Optan från den här PC:n: USB-C + `pio run -t upload`, eller flashar du?
+- [x] F1 Sessionslängd: 10 min glidande, förlängs vid varje skrivning. **Ja.**
+- [x] F2 Nivåer: **tre nivåer med standardlösenord** (Johan): 1 = Operatör `1111`, 2 = Tekniker `2222`, 3 = Service `9999`. Inloggningen är därmed ALLTID på — standardlösenorden gäller tills de byts (status varnar när ett standardlösenord är kvar). Se D13 för vad varje nivå får göra.
+- [x] F3 Klonfil: "se ovan" — tolkat som att lösenorden INTE följer med klonfilen: en klonad enhet startar med standardlösenorden. Säg till om det ska vara tvärtom.
+- [x] F4 Verktygsläget utan inloggning som återställningsväg. **OK.**
+- [x] F5 Flashning: USB-C från laptopen + PlatformIO (`pio run -t upload`). Går det inte kan kabeln behöva bytas.
+
+### D13 — nivåmodellen (spikad 2026-10-16)
+
+| Nivå | Standard | Får göra (POST) |
+|---|---|---|
+| 1 Operatör | `1111` | börvärden/blockparametrar (`/api/fb` p), kurvpunkter (`/api/curves`), VAI/VDI (`/api/service type=vai|vdi`), reläer (`/api/relay`), tidkanaler (`/api/channel`), klocka (`/api/time`), eget lösenord |
+| 2 Tekniker | `2222` | allt ovan + hand/sim (`/api/service` do/ao/ai/di), IO-typer/etiketter/offsets (`/api/io`), block skapa/radera/reset (`/api/fb/create|delete`, `reset=1`), makron, RTU (`/api/rtu/*`), `system/reset-max`, eget lösenord |
+| 3 Service | `9999` | allt + nätverk (`/api/network`), fabriksåterställning, verktygsläge via API, alla lösenord (`/api/password level=1|2|3`) |
+
+GET är alltid fri (D4). Modbus TCP berörs inte. Token bär nivån; `/api/login`
+matchar lösenordet mot nivå 3 → 2 → 1 (första träff ger nivån). Fel nivå →
+`403 {ok:false, err:"kräver nivå 2 (tekniker)"}`; saknad/utgången token →
+`401`. Fickpanelen: `losen <nivå> <nytt>` / `losen <nivå> standard`.
+Verktygsläget (USER 5 s) kör utan gate.
 
 ## Övervakning: "Opta-ping"
 
@@ -336,7 +359,7 @@ Scenen hämtas från Optan.
 |---|---|---|
 | E0 | Bänktest: direktkabel padda–Opta med fast IP; laddning i värdläge; lokalt serverad sida pollar och skriver mot bänk-Optan från annan origin; Ethernet + LTE samtidigt | — |
 | E1 | **KLAR 2026-10-16** (katapult-scada: `runtime/src/client/OptaClient.ts` + `ScadaClient.ts`, val i `main.ts`, `connection.opta` i project.yaml). Bänkverifierat i webbläsare mot 192.168.1.117: kortet live, börvärde 21,5 skrivet via faceplatens Skriv och läst tillbaka ur `/api/fb`, kurvpunkt skriven via kurvkortet och läst ur `/api/curves`, tidkanalsymbolen visar kanal 0:s schema. Testscen: `scenes-test/` i detta repo; dev-server = launch-posten `scada-opta` (SCENES_DIR → scenes-test, `--host 0.0.0.0`, port 5279). Kvar i E1: statiskt paket (vite build + mapp) i stället för dev-server | katapult-scada |
-| E2 | Inloggning i firmwaren (lösenord i persist, `POST /api/login` → kortlivad token, skrivning kräver token, teknikersidan får inloggning) | optaModbusRemoteIO |
+| E2 | **KLAR 2026-10-16** (optaModbusRemoteIO: `auth.h/.cpp`, gate + `/api/login|logout|password|relay` i `web_server.cpp`, `modbusSetManualCoil`, CLI `losen`, parserfix; teknikersidan: token i `optaFetch`, inloggningsruta, Säkerhet-kort, 🔒/🔓-pill; docs + CLAUDE.md). Flashad på bänk-Optan (498 500 B). 27 API-kontroller gröna (`scratchpad/e2_test.py`): nivåer, 401/403/429, relä via MANUAL (R3 slog fysiskt), parserfix, lösenordsbyte, spärr. Tokentest: 7 skrivningar/2 min på en token, 34–131 ms. Runtime: `switchDevice` → `/api/relay`, Opta-fel visas i klartext, cachad token släpps vid "inloggning krävs"; D4-flödet verifierat i webbläsare (ruta vid Skriv → 1111 → skrivning → token 10 min). D12 stängd | optaModbusRemoteIO + katapult-scada |
 | E3 | Scenblob i flash + `GET/POST /api/hmi/scene`; "Skicka till Optan" i byggläget via pollern | optaModbusRemoteIO + webbstyr-energy-platform + katapult-scada |
 | E4 | APK: WebView-skal, assets, UDP-upptäckt, lock task, skärm på, inloggning, nätbindning | detta repo |
 | E5 | Uppkopplad via platta: status-push över HTTPS + push-endpoint i Katapult med offline-larm (väg B) | detta repo + webbstyr-energy-platform |

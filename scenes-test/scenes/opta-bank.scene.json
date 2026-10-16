@@ -63,6 +63,14 @@
       "props": { "label": "PLC-klocka" }
     },
     {
+      "id": "r3",
+      "type": "switch",
+      "x": 720,
+      "y": 255,
+      "bind": { "state": "opta-testbank.do3_status" },
+      "props": { "label": "R3 (manuell, E2)" }
+    },
+    {
       "id": "tk0",
       "type": "timechannel",
       "x": 720,
