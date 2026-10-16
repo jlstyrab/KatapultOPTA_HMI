@@ -64,7 +64,7 @@ i ett projekt.
 | D1 | 2026-10-16 | Runtimen (klienten) bor på paddan, inte på Optan | Optan slipper blob-area, gzip-servering och cache-headers för 132 KB; OptaClient är samma kod oavsett värd, så Opta-hostad bundle kan läggas till senare |
 | D2 | 2026-10-16 | Scenen bor i Optan som en liten blob | Utbytt platta får kortet automatiskt; Optan äger projektet; scenen är tiotals KB, inte hundratals |
 | D3 | 2026-10-16 | Egen WebView-APK, inte kioskwebbläsare | Inga köpta beroenden; egen WebView får tillåta blandat innehåll (HTTPS-app → HTTP-Opta) och fetch från lokala assets, vilket Chrome blockerar. Sedan LTE-idén också: bara en egen app kan binda trafiken till rätt nätverk |
-| D4 | 2026-10-16 | Inloggning i Optan: läsning fri, skrivning kräver token | Skydd mot oavsiktlig ändring, inte kryptering (ren HTTP på kabel). Gäller teknikersidan och JSON-API:t lika |
+| D4 | 2026-10-16 | **Spikat (Johan):** ingen inloggning för att titta — HMI:t startar i visa-läge. Först när man trycker för att ändra något (börvärde, tidkanal, hand) kommer inloggningsrutan upp. Därefter hålls inloggningen en stund så man slipper logga in per fält. I Optan: läsning fri, skrivning kräver token | Skydd mot oavsiktlig ändring, inte kryptering (ren HTTP på kabel). Gäller teknikersidan och JSON-API:t lika. Exakt så fungerar scadans lösenläge redan (`scada_control_auth=password`: `onWrite` öppnar `LoginDialog` vid första skrivning, token cachas med `expiresAt`), så runtimen behöver ingen ny logik — bara att OptaClient.login pekar på Optan |
 | D5 | 2026-10-16 | Panelläge i firmwaren (lätt sida med stora siffror) parkerat som fallback | Täcker "ändra börvärde" billigt om driftkortsvägen drar ut på tiden |
 | D6 | 2026-10-16 | **Förslag, ej spikat:** Ethernet för både padda och uppkoppling; USB avvisas | Se analysen nedan |
 | D7 | 2026-10-16 | **Förslag, ej spikat:** nätläge väljs vid driftsättning i Optans HMI: *Fristående* (direktkabel, fallback-IP) eller *Uppkopplad* | Ett val, inte två produkter |
@@ -248,6 +248,7 @@ Scenen hämtas från Optan.
 - [ ] Klockan vid strömavbrott utan NTP (fristående anläggning med tidkanaler). Uppkopplad via platta: appen kan sätta Optans klocka från plattans.
 - [ ] Flashutrymme för scenblob i bank 2 — verifiera mot linkerscript; sektorstorlek 128 KB.
 - [ ] Token i `Authorization`-huvud (kräver OPTIONS) eller som formulärfält?
+- [ ] Hur länge inloggningen hålls efter sista tryck (förslag: 5–10 min inaktivitet, så en lämnad panel inte står armerad; scadan styr i dag med `ui_session_minutes`).
 - [ ] Lägsta WebView-version vi stöder; sänka byggmålet från ES2022?
 - [ ] Push-endpoint i Katapult: HTTP POST med nyckel eller MQTT över TLS? Enhetstyp "opta via platta" med offline-larm.
 - [ ] Var Opta-ping-lyssnaren bor (nav bakom WG vs demo-servern).
