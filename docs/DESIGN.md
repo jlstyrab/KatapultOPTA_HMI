@@ -131,6 +131,25 @@ Kollade i koden 2026-10-15/16. Ändras de, ändras designen.
   OptaClientens namn (blocket heter `rad1_regulator`) — faceplaten visar blankt
   för de raderna; `kurva1_*` fungerar. Rita om kortet mot rätt prefix när det
   blir skarpt.
+- **Så knyts en givare till ett kort (kollat 2026-10-17).** En bindning är
+  bara en sträng `enhets-id.metric`; plattan slår upp den **med namn** i
+  OptaClientens egen tagglista (byggd ur `/api/service`, `/api/fb` …), aldrig
+  via Modbus. Enhets-id:t följer med i paketet (`package.device` = Katapults
+  device_id), så prefixet stämmer automatiskt. Metric för en ingång =
+  Optans **interna namn i gemener** (`io_map.cpp`: `AI_1`–`AI_7`, `PT1000`
+  (I8), `EXT_AI_1`–`6`, `VAI_1`–`8` → `ai_1`, `pt1000`, `ext_ai_1`, `vai_2`);
+  etiketten i Optans HMI ("Ute") påverkar bara visningsnamnet, inte
+  bindningen. Byggläget (katapult-scada) visar **bara Katapults tagg-katalog**
+  i väljaren (`catalogSelect`, ingen fritext), och en Katapult-tagg uppstår
+  först när ett registerrad finns i Enheter → Modbus och har pollats en gång.
+  **Luckor:** "Hämta från Optan" skapar rader för block, kurvor och larm — inte
+  för ingångar; de läggs för hand (`ext_ai_1` = HR 89 int16 ×0,01, `vai_2` =
+  HR 82 int16 ×0,01, `pt1000` = HR 0 int16 ×0,1; I1–I7 finns bara **råa** i
+  IR 0–7, ingenjörsvärdet bara över HTTP). Pi5:s opta-testbank har i dag
+  `vai2` (utan understreck) och ingen `ext_ai_1`, så testscenens
+  avläsningar fungerar bara direkt mot Optan — döp om raden till `vai_2`.
+  Blockprefixet väljs i importdialogen; lämna förvalet (slug av blocknamnet),
+  annars uppstår `reg1_*`-felet ovan.
 - **Faceplate-kortet håller raden efter Skriv** tills readbacken kommit (max
   20 s) och ignorerar nya klick under tiden; simulerad `input`-event räcker
   inte alltid. Två "misslyckade" återställningar under E2-testet var det, inte
@@ -689,6 +708,7 @@ nodens adress i dialogen; lösenläget på i Katapult.
 - [ ] Var Opta-ping-lyssnaren bor (nav bakom WG vs demo-servern).
 - [ ] Vilken Opta-variant i projekten (RS485/WiFi) — påverkar bara WiFi-AP-idén.
 - [ ] Hur "Skicka till Optan" hanterar scener som binder till taggar Optan saknar (entitetsvalidering som Lill-Berts ritverktyg har).
+- [ ] "Hämta från Optan" borde även erbjuda **ingångarna** (I1–I8/PT1000, A0602, VAI) med OptaClientens namn och rätt skala, så givare kan väljas i byggläget utan handpåläggning och samma scen går både mot Katapult och direkt mot Optan (se faktan "Så knyts en givare", 2026-10-17). Ungefär en timme i ModbusView.tsx.
 - [ ] SIM: datakort eller med SMS (för SMS-spåret)?
 
 ## Etapper (preliminära, inget spikat)
