@@ -500,6 +500,61 @@ ConnectivityManagers länkadresser och ur nätverkskorten (`NetworkInterface`),
 plus unicast mot sparad adress. Pollerns upptäckt går från Pi5:s kabel där
 limited broadcast fungerar — därför har det aldrig märkts.
 
+## Förslag E5: uppkoppling via plattan + Opta-ping (2026-10-17, för diskussion)
+
+Paddtest 2 grönt (Johan): APK:n hittar Optan och visar kortet. E5 = väg B i
+Opta-pingen: **plattan rapporterar**, ingen firmware. Underlag i Katapult
+(verifierat): enheter publicerar `katapult/devices/<device_id>/<metric>`
+(JSON med value/unit/ts), LWT `katapult/lwt/<id>`, larm
+`katapult/alarms/<tenant>/<byggnad>/<typ>`; API:t kan publicera MQTT
+(aiomqtt, Lill-Berts testlarm gör det). Dashboarden visar **online när data är
+< 15 min**; röstlarmets `_check_device_offline` (var 60 s) larmar
+`device_offline` efter **30 min**, ställbart per byggnad
+(`rules.device_offline.threshold_min`). Larmblockering/strömkälla per enhet
+finns (migration 046).
+
+### A. Plattan (APK) — rapportören
+
+| # | Förslag |
+|---|---|
+| A1 | **Push var 10:e minut** (ställbart 5–60) av ett kompakt paket (~2 KB): Optans `/api/status` (reläer, manual, ingångar, AO, safe state, hand, givarfel, klocka, program), `/api/fb` (pv/out/alarm/aktiv + parametrar per block), AI-värden ur `/api/service`, `/api/hmi/info` (kortets namn/seq/crc) + plattans egen hälsa: appversion, batteri-%, laddar/ej, nättyp (Wi-Fi/LTE/Ethernet), Opta-nåbar + senaste fel |
+| A2 | **Går över internet-nätet oberoende av Opta-bindningen**: anropet öppnas via det nätverk som har `NET_CAPABILITY_INTERNET` (`Network.openConnection`), så kabeln till Optan och LTE/Wi-Fi till Katapult samsas |
+| A3 | **Pushar även när Optan är onåbar** med `opta_ok:false` — då går det att skilja "plattan död" (tystnad → device_offline) från "Optan död" (plattan lever, larm `opta_unreachable`) |
+| A4 | Inställningar i volym-ned-dialogen: Katapult-URL + paneltoken (klistras in), intervall, "Skicka nu" med kvitto. Sparas i SharedPreferences |
+| A5 | Ingen WorkManager (bibliotek): en timer i aktiviteten räcker — kiosken håller appen i förgrunden, HOME-kategorin startar den efter boot. Missade pushar efter sömn tas igen vid nästa tick |
+| A6 | HTTPS när Katapult har TLS (stackens Caddy, demo); ren HTTP godtas på LAN och för Pi5-testet (`http://192.168.1.109:8000`). Token i `Authorization: Bearer` |
+
+### B. Katapult — panelen som enhet
+
+| # | Förslag |
+|---|---|
+| B1 | **Migration 048 `panels`**: id, tenant, building, zone, `device_id` (den enhet värdena bokförs på, t.ex. `pannrum-opta`), label, `token` (32 hex, visas en gång), `last_seen`, `last_payload` jsonb (hälsa, hmi-info, opta_ip), `push_minutes` |
+| B2 | **`POST /panel/push`** (`Authorization: Bearer <token>`): validerar token → döper om Optans råa JSON till Katapults taggar med **samma regler som OptaClient** (slug(block)_pv/_out/_alarm/_status + parameternycklar, do{n}_status/do{n}_manual, ai_*, sys_*) → publicerar `katapult/devices/<device_id>/<metric>` + LWT 1 → ingestion lagrar, WS pushar, dashboard/driftkort/Lill-Bert ser värdena. `opta_ok:false` → larm `opta_unreachable` (källa system) och inga värden. Uppdaterar `panels.last_seen/last_payload`. Svarar `{ok, next_minutes}` så servern kan styra takten |
+| B3 | **Enheten skapas av panelen** första gången (transport `generic`, model "Opta via panel", zon ur panelen) — ingen godkännandedialog; den syns i Enheter som vanligt och får offline-larm, larmblockering m.m. gratis |
+| B4 | **UI: Enheter → Paneler** — lista (label, byggnad/zon, senast hörd, batteri, laddar, nät, Opta-IP, Opta ok, kort i Optan: namn/seq, appversion), "Ny panel…" (label, zon, device_id, intervall) som visar token en gång, "Visa token igen" (nytt token), radera |
+| B5 | **Larm:** tystnad → befintligt `device_offline` (30 min default; föreslår samma); Optan onåbar → `opta_unreachable`; ny: **`panel_not_charging`** om plattan inte laddar på > 60 min (årsdriftens svagaste del, D/E-raden i E4) |
+| B6 | Lill-Bert: panelen är en enhet → `get_device`-verktygen fungerar utan tillägg; en rad i CHAT_KNOWLEDGE om "panel = Opta via LTE-platta" |
+
+### C. Utanför E5 (E6/E7)
+
+- Nätläge Fristående/Uppkopplad i Optans HMI + heartbeat i firmwaren (väg A) för anläggningar **utan** platta men med router.
+- Larmcentralen på navet (flottan): panelerna når sin Katapult-nod; en samlad vy över noder+paneler kan läsa `panels` via API senare.
+- K1 Katapult-läge i APK:n (forkens idé) — oberoende, egen etapp.
+- K2 pin på kioskdialogen — liten; kan följa med E5:s APK-bygge.
+
+### D. Test
+
+1. Pi5: migration 048, API-endpoint, Paneler-vyn → skapa panel "Bänk" i johan/knastorp-5 med device_id `bank-opta` → token.
+2. Lenovo-paddan (Wi-Fi, samma LAN): Katapult-URL `http://192.168.1.109:8000`, token → "Skicka nu" → enheten `bank-opta` dyker upp i Enheter med Optans värden; dra ur Optans kabel → `opta_unreachable`; stäng appen → `device_offline` efter 30 min.
+3. Internetvägen: samma padda på mobilt/annat nät mot `http://luddetrutt.tplinkdns.com:10001` (muxen) — bekräftar A2.
+
+### Frågor till Johan
+
+- [ ] I1 Push var 10:e minut och offline-larm efter 30 min — rätt balans mellan "glesa bakgrundskontroller" och insyn? (5/15 min och 15/60 min är också rimliga.)
+- [ ] I2 Panelen skapas i Katapult (Enheter → Paneler) och token klistras in i appen — OK? (QR-skanning kräver kamerabehörighet; kan komma senare.)
+- [ ] I3 Batterilarm `panel_not_charging` efter 60 min utan laddning — vill du ha det från start?
+- [ ] I4 K2 (pin på kioskdialogen) med i samma APK-bygge?
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av
