@@ -450,6 +450,31 @@ Runtimens commit skrivs in i appens version (visas i inställningsdialogen).
 - [x] H3 Orientering **följer plattan**.
 - [x] H4 Installation via **nedladdningslänk**.
 
+## Idé (2026-10-17, ej spikad): Katapult-läge i APK:n + pin på kiosken
+
+Johans fråga: fungerar kiosk med låsbar pin även mot Katapult, och går
+pin-koderna att byta? Svar och förslag:
+
+- **Pin-byte finns** (E2): Optans HMI → Inställningar → Säkerhet, fickpanelen
+  `losen`, eller `POST /api/password`. Service byter alla nivåer, övriga sin
+  egen; tom kod = standard igen; statusraden varnar om standardkoder.
+- **K1 Katapult-läge i APK:n**: inställning "Katapult-box: adress" → appen
+  laddar boxens scada-runtime (http://<box>:8085/ eller muxen/Caddy-TLS) i
+  samma WebView i stället för den inbyggda runtimen + Optan. Kiosk, skärm på,
+  autostart, volym-ned-dialog = samma kod. Ingen plattformsändring. ~1 h.
+- **K2 Pin på kiosken**: volym-ned-dialogen kräver en app-pin (egen, lagrad i
+  SharedPreferences, bytbar i dialogen) innan fästning kan stängas av eller
+  adress bytas. ~30 rader. Device owner gör fästningen omöjlig att lämna
+  oavsett.
+- **K3 Pin vid ändring i Katapult-läget**: plattformens lösenläge
+  (`scada_control_auth=password`) finns och ber om Katapult-konto vid första
+  ändringen. Snabbaste vägen: operatörskonto med numeriskt lösenord. Äkta pin
+  utan användarnamn, per byggnad = ny inställning + liten auth-endpoint som
+  ger styr-JWT + pin-variant av LoginDialog. ~½ dag.
+
+Byggs först efter Johans ok; naturligt att lägga K1+K2 i samma APK-bygge som
+paddtestets rättelser.
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av
