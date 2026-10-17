@@ -475,6 +475,31 @@ pin-koderna att byta? Svar och förslag:
 Byggs först efter Johans ok; naturligt att lägga K1+K2 i samma APK-bygge som
 paddtestets rättelser.
 
+## Paddtest 1 (2026-10-17, Lenovo Tab One på Wi-Fi) och svaret
+
+Johans rapport: UDP-upptäckten hittade inte Optan; efter "Sök igen" visade
+WebView:n "webbsidan är inte tillgänglig" för `http://127.0.0.1:35735/?opta=
+192.168.1.117` — alltså **appens egen assetserver**, inte Optan (adressen var
+känd och sparad). Utan adb på plattan fanns ingen logg att läsa.
+
+Åtgärder (f4eb949): diagnoslogg i inställningsdialogen (volym ned 3 s),
+assetservern binder explicit till IPv4 127.0.0.1 och självtestar sig från
+appen (vid start, efter nätbindning, efter sidfel), varje anslutning helt
+inkapslad (ett ohanterat undantag i en tråd fäller hela processen, och Chrome
+öppnar spekulativa anslutningar som aldrig skickar), nätbindning bara när
+Optan svarade på Ethernet (Wi-Fi är redan standardrutt), unicast-fråga mot
+sparad/inmatad adress när broadcast tiger, HTTP-koll av `/api/hmi/info`,
+felöverlägg med loggsvans i stället för tyst omladdning var 5:e sekund.
+Nästa paddtest: öppna diagnosen och fotografera/skriv av loggen.
+
+**Verifierat från PC:n på samma Wi-Fi (2026-10-17):** upptäckt till
+`255.255.255.255` får **inget** svar från Optan, medan subnät-broadcast
+`192.168.1.255` och unicast `192.168.1.117` svarar direkt (name=opta,
+id=A8:61:0A:50:07:15). Appen sänder nu till subnätets broadcastadress både ur
+ConnectivityManagers länkadresser och ur nätverkskorten (`NetworkInterface`),
+plus unicast mot sparad adress. Pollerns upptäckt går från Pi5:s kabel där
+limited broadcast fungerar — därför har det aldrig märkts.
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av

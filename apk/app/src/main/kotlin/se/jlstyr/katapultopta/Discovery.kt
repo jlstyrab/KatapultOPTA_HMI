@@ -94,13 +94,33 @@ object Discovery {
         return "$kind $addrs ($inet)"
     }
 
+    /** Subnät-broadcast för alla IPv4-adresser på plattans nätverkskort (reservväg
+     *  när ConnectivityManager inte ger några adresser). Verifierat 2026-10-17
+     *  från en Wi-Fi-klient: 255.255.255.255 når INTE Optan, 192.168.1.255 gör det. */
+    private fun interfaceBroadcasts(): List<InetAddress> {
+        val out = ArrayList<InetAddress>()
+        try {
+            val ifs = java.net.NetworkInterface.getNetworkInterfaces() ?: return out
+            for (nif in ifs) {
+                if (!nif.isUp || nif.isLoopback) continue
+                for (ia in nif.interfaceAddresses) {
+                    val bc = ia.broadcast ?: continue
+                    if (bc is Inet4Address && !out.contains(bc)) out.add(bc)
+                }
+            }
+        } catch (e: Exception) { Diag.log("nätverkskort: ${e.message}") }
+        return out
+    }
+
     private fun probe(cm: ConnectivityManager, n: Network?, timeoutMs: Int, hits: MutableMap<String, Hit>) {
         val label = if (n == null) "obundet" else describe(cm, n)
         val targets = ArrayList<InetAddress>()
         try { targets.add(InetAddress.getByName("255.255.255.255")) } catch (_: Exception) {}
         if (n != null) {
-            cm.getLinkProperties(n)?.linkAddresses?.forEach { la -> broadcastOf(la)?.let { targets.add(it) } }
+            cm.getLinkProperties(n)?.linkAddresses?.forEach { la -> broadcastOf(la)?.let { if (!targets.contains(it)) targets.add(it) } }
         }
+        // Subnät-broadcast ur nätverkskorten också — den vägen svarar Optan från Wi-Fi.
+        for (bc in interfaceBroadcasts()) if (!targets.contains(bc)) targets.add(bc)
         var replies = 0
         try {
             DatagramSocket(null).use { s ->
