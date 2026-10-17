@@ -75,6 +75,7 @@ i ett projekt.
 | D10 | 2026-10-16 | Taggnamn direkt mot Optan = Katapults importkonvention: `slug(blocknamn)_pv/_out/_status/_alarm` + parameternycklarna ur `/api/modbus-map`, kurvpunkter `_x1…_y6` + `_npts`, reläer `do{n}_status`, tidkanaler `tidkanal{i}_status` (Optans index 0–7), övrig I/O = Optans namn i gemener (`ai_1`, `pt1000`, `ext_ai_1`, `vai_2`, `di_1`, `ao_1`) | En scen ritad mot plattformens Opta-enhet körs oförändrad direkt mot PLC:n; enhetsnamnet är konfigurerbart (`?device=`, `connection.optaDevice`) så det kan vara samma som plattformens device_id |
 | D11 | 2026-10-16 | Styr-token skickas som formulärfält `token` på skrivningar, inte i `Authorization`-huvud | Formulär-POST är en "simple request" utan CORS-preflight; firmwaren slipper OPTIONS. Stänger den öppna frågan |
 | D12 | 2026-10-16 | Reläer styrs INTE via HTTP förrän firmwaren har en väg för MANUAL-källan (samma semantik som Modbus-coil 0–3). OptaClient.switchDevice avvisar med tydligt fel | Enda HTTP-vägen i dag är hand-läget, som trumfar skydd — fel verktyg för en operatörspanel. Firmwaretillägg i E2 |
+| D16 | 2026-10-17 | **Spikat (Johan), E5:** push var 10:e minut, offline-larm efter 30 min; panelen skapas i Katapult (Enheter → Paneler) och token klistras in i appen; batterilarm `panel_not_charging` efter **4 h** utan laddning | Dagens paddor har lång batteritid och ligger inte konstant på laddning — 60 min hade gett falsklarm. K2 (pin på kioskdialogen) beslutas när frågan är förklarad; se LAN-säkerhetsmodellen |
 | D9 | 2026-10-16 | **Förslag, ej spikat:** *Uppkopplad* finns i två varianter — **via platta** (LTE-platta pushar status över HTTPS, ingen firmware) eller **via router** (4G-router med WireGuard till navet, Optan nåbar som en nod) — valet görs per anläggning | Plattan är billigast och räcker för fjärrinsyn; routern vinner där täckningen i skåpet är dålig eller Optan ska nås direkt. Se analysen "LTE-platta som upplänk" |
 
 ## Verifierade fakta som designen vilar på
@@ -518,7 +519,7 @@ finns (migration 046).
 | # | Förslag |
 |---|---|
 | A1 | **Push var 10:e minut** (ställbart 5–60) av ett kompakt paket (~2 KB): Optans `/api/status` (reläer, manual, ingångar, AO, safe state, hand, givarfel, klocka, program), `/api/fb` (pv/out/alarm/aktiv + parametrar per block), AI-värden ur `/api/service`, `/api/hmi/info` (kortets namn/seq/crc) + plattans egen hälsa: appversion, batteri-%, laddar/ej, nättyp (Wi-Fi/LTE/Ethernet), Opta-nåbar + senaste fel |
-| A2 | **Går över internet-nätet oberoende av Opta-bindningen**: anropet öppnas via det nätverk som har `NET_CAPABILITY_INTERNET` (`Network.openConnection`), så kabeln till Optan och LTE/Wi-Fi till Katapult samsas |
+| A2 | **Går via det nätverk som når Katapult-URL:en, oberoende av Opta-bindningen** (`Network.openConnection`): först ett nät vars subnät innehåller URL:ens värd (LAN-fallet, Värpinge), annars nätet med `NET_CAPABILITY_INTERNET`, sist standardnätet. Så samsas kabeln till Optan med LTE/Wi-Fi till Katapult, och en panel på LAN behöver inget internet alls (justerat 2026-10-17 efter Johans Värpinge-fråga) |
 | A3 | **Pushar även när Optan är onåbar** med `opta_ok:false` — då går det att skilja "plattan död" (tystnad → device_offline) från "Optan död" (plattan lever, larm `opta_unreachable`) |
 | A4 | Inställningar i volym-ned-dialogen: Katapult-URL + paneltoken (klistras in), intervall, "Skicka nu" med kvitto. Sparas i SharedPreferences |
 | A5 | Ingen WorkManager (bibliotek): en timer i aktiviteten räcker — kiosken håller appen i förgrunden, HOME-kategorin startar den efter boot. Missade pushar efter sömn tas igen vid nästa tick |
@@ -532,7 +533,7 @@ finns (migration 046).
 | B2 | **`POST /panel/push`** (`Authorization: Bearer <token>`): validerar token → döper om Optans råa JSON till Katapults taggar med **samma regler som OptaClient** (slug(block)_pv/_out/_alarm/_status + parameternycklar, do{n}_status/do{n}_manual, ai_*, sys_*) → publicerar `katapult/devices/<device_id>/<metric>` + LWT 1 → ingestion lagrar, WS pushar, dashboard/driftkort/Lill-Bert ser värdena. `opta_ok:false` → larm `opta_unreachable` (källa system) och inga värden. Uppdaterar `panels.last_seen/last_payload`. Svarar `{ok, next_minutes}` så servern kan styra takten |
 | B3 | **Enheten skapas av panelen** första gången (transport `generic`, model "Opta via panel", zon ur panelen) — ingen godkännandedialog; den syns i Enheter som vanligt och får offline-larm, larmblockering m.m. gratis |
 | B4 | **UI: Enheter → Paneler** — lista (label, byggnad/zon, senast hörd, batteri, laddar, nät, Opta-IP, Opta ok, kort i Optan: namn/seq, appversion), "Ny panel…" (label, zon, device_id, intervall) som visar token en gång, "Visa token igen" (nytt token), radera |
-| B5 | **Larm:** tystnad → befintligt `device_offline` (30 min default; föreslår samma); Optan onåbar → `opta_unreachable`; ny: **`panel_not_charging`** om plattan inte laddar på > 60 min (årsdriftens svagaste del, D/E-raden i E4) |
+| B5 | **Larm:** tystnad → befintligt `device_offline` (30 min default; föreslår samma); Optan onåbar → `opta_unreachable`; ny: **`panel_not_charging`** om plattan inte laddar på > **4 h** (Johan 2026-10-17: paddor har lång batteritid och ligger inte konstant på laddning; årsdriftens svagaste del, D/E-raden i E4) |
 | B6 | Lill-Bert: panelen är en enhet → `get_device`-verktygen fungerar utan tillägg; en rad i CHAT_KNOWLEDGE om "panel = Opta via LTE-platta" |
 
 ### C. Utanför E5 (E6/E7)
@@ -548,12 +549,79 @@ finns (migration 046).
 2. Lenovo-paddan (Wi-Fi, samma LAN): Katapult-URL `http://192.168.1.109:8000`, token → "Skicka nu" → enheten `bank-opta` dyker upp i Enheter med Optans värden; dra ur Optans kabel → `opta_unreachable`; stäng appen → `device_offline` efter 30 min.
 3. Internetvägen: samma padda på mobilt/annat nät mot `http://luddetrutt.tplinkdns.com:10001` (muxen) — bekräftar A2.
 
-### Frågor till Johan
+### Frågor till Johan — besvarade 2026-10-17 (D16)
 
-- [ ] I1 Push var 10:e minut och offline-larm efter 30 min — rätt balans mellan "glesa bakgrundskontroller" och insyn? (5/15 min och 15/60 min är också rimliga.)
-- [ ] I2 Panelen skapas i Katapult (Enheter → Paneler) och token klistras in i appen — OK? (QR-skanning kräver kamerabehörighet; kan komma senare.)
-- [ ] I3 Batterilarm `panel_not_charging` efter 60 min utan laddning — vill du ha det från start?
-- [ ] I4 K2 (pin på kioskdialogen) med i samma APK-bygge?
+- [x] I1 Push var 10:e minut och offline-larm efter 30 min — **OK**.
+- [x] I2 Panelen skapas i Katapult (Enheter → Paneler) och token klistras in i appen — **OK**.
+- [x] I3 Batterilarm `panel_not_charging` — **ja, men glesare: 4 h** (paddorna ligger inte konstant på laddning).
+- [ ] I4 K2 = pin på volym-ned-dialogen (frågan förklarad i LAN-avsnittet nedan): utan pin kan vem som helst som håller volym ned i 3 s byta adress eller stänga kiosken. Förslag: egen pin, standard 9999, bytbar i dialogen — med i E5:s APK-bygge?
+- [ ] I5 Värpinge har ingen Opta → paddan där behöver **K1 Katapult-läge** (appen visar nodens driftkort i stället för Optans). Tas K1 med i E5 (≈1 h i appen, inget i plattformen)?
+
+## Panel på LAN mot Katapult (Värpinge) — säkerhetsmodell (2026-10-17)
+
+Johans fråga: kan en panel prata med Katapult på LAN:et? Hos kunden Värpinge
+ska en padda stå tillgänglig för gårdens arbetare, och kunden är mån om (a)
+okänt beteende från arbetare vid plattan och (b) att plattan inte blir en för
+honom okänd väg in från internet.
+
+**Ja — LAN är normalfallet.** Panelens Katapult-URL är vilken adress som
+helst; hos Värpinge nodens namn på 443 på LAN:et (192.168.1.178). Pushen går
+dit direkt, inte via navet. A2 är justerad därefter: anropet går via det nät
+som når URL:en, LAN först.
+
+### Plattan ur nätets synvinkel
+
+- **Bara utgående anslutningar**: HTTP till Optan (kabel/LAN) och HTTP(S) till
+  Katapult-noden. Den lyssnar inte på något LAN-gränssnitt — `AssetServer`
+  binder 127.0.0.1, UDP-upptäckten skickar en fråga och lyssnar 1,5 s på
+  samma socket.
+- **Behöver inget internet i LAN-läget.** Kan stå på ett Wi-Fi utan
+  internet eller på kabel i ett VLAN som bara når noden.
+- **Öppnar inget i kundens router.** Nodens väg till navet är den redan
+  befintliga utgående WireGuard-tunneln (10.99.102.1); panelen tillför ingen
+  ny ingång. Fjärrinsyn i panelens status går via noden, som allt annat.
+- **Inga uppdateringar bakvägen**: APK:n installeras manuellt (länk eller
+  USB), ingen app-butik, ingen auto-uppdatering, inga tredjepartsbibliotek
+  som ringer hem.
+- **Paneltoken** ger bara rätt att posta panelstatus — den kan varken läsa
+  eller styra något. Stulen token = falsk hälsorapport, inget mer.
+
+### Arbetare vid plattan
+
+- **Visa utan inloggning, ändra med** (D4). Mot Optan: nivåerna
+  1111/2222/9999 (bytbara). I Katapult-läget: plattformens lösenläge
+  `scada_control_auth=password` (Inställningar → Säkerhet & sessioner) ber om
+  Katapult-konto vid första ändringen, session enligt `ui_session_minutes`.
+- **Kiosk**: lock task + appen som HOME + Back blockerad. Utan device owner
+  kan Android-fästningen hävas med Back+Översikt (man hamnar i appen igen
+  eftersom den är HOME, men meddelandepanel och snabbinställningar nås).
+  För Värpinge: sätt appen som **device owner** vid driftsättning (en adb-rad
+  på en fabriksåterställd platta utan Google-konto) → fästningen kan inte
+  lämnas och inga systemdialoger dyker upp. Läggs i driftsättningsavsnittet.
+- **K2 pin på volym-ned-dialogen** (= fråga I4): utan den kan vem som helst
+  som håller volym ned i 3 s byta adress eller stänga kiosken.
+- Plattans egen skärmlåskod skyddar Android-inställningarna.
+
+### Kända luckor — i Katapult, inte i panelen
+
+- Bootstrap-JWT:n från scada-containern (`POST /bootstrap`, utan inloggning)
+  är en maskintoken med `role=user`, och API:t låter den skriva. Lösenläget
+  upprätthålls i runtimen (`controlJwt ?? jwt`), inte i API:t. Den som når
+  scada-sidan från LAN:et med egen dator kan alltså styra switchar utan
+  lösenord — **samma exponering som i dag för alla på LAN:et; panelen ändrar
+  inget.** Härdning (liten, backlog i plattformen): när
+  `scada_control_auth=password` ska bootstrap-token ha `role=viewer`, så att
+  skrivning kräver inloggnings-JWT:n även mot API:t.
+- Ingen operatörsroll (MANUAL.md "Lucka"): viewer får inte styra, så ändring
+  från panelen kräver i dag ett admin-konto. Operatörsroll = backlog.
+
+### Värpinge = K1
+
+Värpinge har ingen Opta: paddan ska visa Katapults driftkort. Det är **K1
+Katapult-läge** i appen (WebView:n laddar nodens scada-sida i stället för den
+inbyggda runtimen; kiosk, pin och rapportör är samma kod). Rapportören pushar
+då bara plattans hälsa (ingen Opta-del) → panelen får offline- och
+batterilarm som alla andra enheter. Fråga I5.
 
 ## Övervakning: "Opta-ping"
 
@@ -596,6 +664,12 @@ På plattan: installera APK → appen hittar Optan (UDP) eller IP knappas in →
 logga in en gång → (uppkopplad via platta: server + nyckel) → lås appen.
 Scenen hämtas från Optan.
 
+Där plattan står öppet (Värpinge): fabriksåterställ, hoppa över Google-konto,
+installera APK:n via USB, sätt appen som device owner (`adb shell dpm
+set-device-owner se.jlstyr.katapultopta/.DeviceAdmin`, en gång, innan något
+konto läggs till), sätt skärmlåskod, slå på kiosk + pin. Katapult-läge (K1):
+nodens adress i dialogen; lösenläget på i Katapult.
+
 ## Öppna frågor
 
 - [ ] Fast IP på Androids Ethernet-gränssnitt: vilka tillverkare (Samsung ja?). Avgör plattval, eller DHCP-server i Optan.
@@ -626,7 +700,7 @@ Scenen hämtas från Optan.
 | E2 | **KLAR 2026-10-16** (optaModbusRemoteIO: `auth.h/.cpp`, gate + `/api/login|logout|password|relay` i `web_server.cpp`, `modbusSetManualCoil`, CLI `losen`, parserfix; teknikersidan: token i `optaFetch`, inloggningsruta, Säkerhet-kort, 🔒/🔓-pill; docs + CLAUDE.md). Flashad på bänk-Optan (498 500 B). 27 API-kontroller gröna (`scratchpad/e2_test.py`): nivåer, 401/403/429, relä via MANUAL (R3 slog fysiskt), parserfix, lösenordsbyte, spärr. Tokentest: 7 skrivningar/2 min på en token, 34–131 ms. Runtime: `switchDevice` → `/api/relay`, Opta-fel visas i klartext, cachad token släpps vid "inloggning krävs"; D4-flödet verifierat i webbläsare (ruta vid Skriv → 1111 → skrivning → token 10 min). D12 stängd | optaModbusRemoteIO + katapult-scada |
 | E3 | **BYGGD 2026-10-16**, fyra lager: (1) firmware `hmi_store.h/.cpp` (A/B-slot à 256 KB, header sist, CRC32) + `GET /api/hmi/scene|info`, `POST begin/chunk/end/clear` (nivå 2, binär chunk-body, path/query-split) — bänktest `scratchpad/e3_upload.py`: upp/läs tillbaka byte för byte, A/B-byte seq+1, CRC-fel lämnar gamla, 401, clear → 404 (optaModbusRemoteIO 41cf27a); (2) runtime: paketkälla (`resolveProject`/`readFile`), Optans paket vinner över lokala filer, `?pkg=local`, omladdning vid ny CRC var 5:e min — verifierat: dev-servern renderar kortet ur Optans flash (katapult-scada 94741e7); (3) plattform: `api/opta_hmi.py` bygger paketet ur scada-containern, `POST/GET …/poll-devices/{id}/opta-hmi`, pollern `opta_hmi_push` (login nivå 2, begin/chunk/end med omförsök + offset-skydd), migration 047 `http_password` krypterat (`api/secretbox.py`), 🔑 i Modbus-vyn (2acfe09); (4) byggläget: "⇪ Skicka till Optan…" med dialog (host.ts + editor/media/main.js). **E2E KLAR 2026-10-16 via Pi5:** lösenord satt på opta-testbank via API:t (PATCH http_password), `POST …/opta-hmi {scene_ids:["hyst-test"]}` → paket 2305 B rå / 797 B gz, upp på 2,9 s, slot A seq 3, audit-rad `opta_hmi_push` status sent; runtimen med bara `?opta=192.168.1.117` laddade "Hysteres-test (Opta)" ur Optan med kurvkortet live. Deploy: plattform 2acfe09 + migration 047 på Pi5 (api, poller, frontend), scada via bundle scada-20261016a | alla tre + KatapultOPTA_HMI |
 | E4 | **BYGGD 2026-10-16** (commit f9d57ed): `apk/` Gradle-projekt utan bibliotek — `MainActivity` (WebView, kiosk via startLockTask, skärm alltid på, immersive, volym ned 3 s → inställningar, Back blockerad), `AssetServer` (HTTP på 127.0.0.1 ur assets/www), `Discovery` (UDP 5000 per nätverk, Ethernet först, broadcast + subnät, multicast-lås, `bindProcessToNetwork`), `BootReceiver` + HOME-kategori. Runtime 94741e7 inbäddad via `tools/sync-runtime.sh`. Repot publikt på **https://github.com/jlstyrab/KatapultOPTA_HMI** (MIT), `.github/workflows/apk.yml` bygger debug-APK vid push och lägger den som förhandsrelease `latest`. **CI grönt 2026-10-16** (andra körningen, 6c336cf): APK:n ligger på https://github.com/jlstyrab/KatapultOPTA_HMI/releases/download/latest/KatapultOPTA_HMI.apk. Lärdom: `android-actions/setup-android@v3` faller på det utgångna paketet `tools` — runnerns förinstallerade SDK + `sdkmanager --licenses` räcker. Loggar hämtas via API:t med `git credential fill` (gh saknas) och Authorization får INTE följa med 302:an till blob-lagringen. **Test på Lenovo-paddan återstår** (Johan: installera från länken) | detta repo |
-| E5 | Uppkopplad via platta: status-push över HTTPS + push-endpoint i Katapult med offline-larm (väg B) | detta repo + webbstyr-energy-platform |
+| E5 | Uppkopplad via platta: status-push (10 min) via LAN eller internet + `POST /panel/push` i Katapult (migration 048 `panels`, Enheter → Paneler), larm `device_offline` 30 min / `opta_unreachable` / `panel_not_charging` 4 h (D16). Öppet: K2 pin (I4), K1 Katapult-läge för Värpinge (I5) | detta repo + webbstyr-energy-platform |
 | E6 | Uppkopplad via router: nätläge i Optans HMI + heartbeat (A) + lyssnare | optaModbusRemoteIO + katapult-stack (nav) |
 | E7 | Tillval: DHCP-server i Optan (noll konfig på plattan), Opta-hostad bundle, SMS-larm från appen | optaModbusRemoteIO / detta repo |
 
