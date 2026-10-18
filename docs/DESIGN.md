@@ -642,6 +642,39 @@ inbyggda runtimen; kiosk, pin och rapportör är samma kod). Rapportören pushar
 då bara plattans hälsa (ingen Opta-del) → panelen får offline- och
 batterilarm som alla andra enheter. Fråga I5.
 
+## Idé (2026-10-18, ej spikad): flera Optor, en panel
+
+Johans fråga: en panel men flera Optor — går det, eller kan vi enkelt göra
+det möjligt, och vad händer med volym-ned-inställningarna?
+
+**Läget i dag (kollat i koden):**
+
+- Appen samlar **alla** upptäcktssvar (`Discovery.find` → lista). Hittas
+  flera visas "Flera Optor hittades" och man väljer **en**; valet sparas som
+  `ip` och runtimen laddas med `?opta=<ip>`. Alla Optor presenterar sig som
+  "opta" (`discoverySetName` anropas aldrig i firmwaren), så listan skiljer
+  bara på IP.
+- Runtimen har **en** `optaHost`, **en** `OptaClient` med **ett** `deviceId`
+  och hämtar paketet ur den Optan. Styrtoken cachas en per sida
+  (`scada_ctrl_jwt`); OptaClient håller ingen egen token (skickas per anrop).
+- Men modellen är redan flott-vänlig: bindningar är `enhets-id.metric`,
+  snapshot-ramen är `zones: {[deviceId]: …}`, katalogen är en lista av
+  enheter, och projektet har redan **multi-läget `buildings[]`** med
+  byggnadsväljare i headern (plattformens multi-scada).
+
+**Två vägar:**
+
+| Väg | Innehåll | Kostnad |
+|---|---|---|
+| A. Panelen byter Opta | Volym ned → "Sök igen" → välj en annan i listan. Manuell växling, ett kort i taget. Räcker för service, inte för drift | finns i dag |
+| B. **Flotta i panelen** | Runtimen: `OptaFleetClient` som äger en `OptaClient` per Opta och routar på deviceId (switchDevice/writeValue/fetchTimeChannels/login), slår ihop kataloger och snapshot-zoner, rapporterar anslutning per Opta. En kö per Opta — en-socket-regeln gäller per PLC, så N Optor kostar inget extra per PLC. **Varje Opta behåller sitt paket i sin flash** ("Skicka till Optan" oförändrat); panelen hämtar `/api/hmi/scene` från alla och bygger ett projekt i multi-läget: **en "byggnad" per Opta** (titel = paketets namn) → byggnadsväljaren byter Opta, karusellen byter kort inom Optan. Ett översiktskort som binder mot flera Optor fungerar av sig självt (prefixet pekar ut PLC:n) och läggs i valfri Opta. CRC-omladdning per Opta. **Token per Opta** (koder är per PLC): prova samma kod tyst på nästa Opta, fråga bara vid fel. Saknas en Opta: dess byggnad visas med onåbar-överlägg, resten rullar | runtime ≈ ½ dag |
+| | APK: inställningen `ip` blir en **lista** — "Alla hittade" (standard: alla som svarade + sparade) eller handskrivna adresser; runtimen laddas med `?opta=ip1,ip2`. Nätbindning bara om **alla** valda ligger på kabelnätet, annars ingen bindning; unicast-ping per sparad adress när broadcast tiger. **Kiosk, skärm på, autostart, pin (K2), diagnoslogg: oförändrade** — de är panelens egna inställningar, inte Optans. E5-pushen: ett delpaket per Opta i samma push (panelen = en Katapult-panel med flera Opta-enheter) | APK ≈ 2 h |
+| | Firmware: `discoverySetName(programnamn)` så listan säger "Pannrum · .117" i stället för "opta · .117" | 15 min |
+
+Inget i plattformen. Direktkabel (E0) = en Opta; flera kräver switch/LAN.
+Öppet: identitet när Katapult saknas — paketets `device` sätts vid "Skicka
+till Optan", så två Optor med samma namn kolliderar bara om man döper dem lika.
+
 ## Övervakning: "Opta-ping"
 
 Behov: en Opta som faller ifrån ska fångas som en Katapult-nod fångas av
