@@ -577,6 +577,43 @@ finns (migration 046).
 - [ ] I4 K2 = pin på volym-ned-dialogen (frågan förklarad i LAN-avsnittet nedan): utan pin kan vem som helst som håller volym ned i 3 s byta adress eller stänga kiosken. Förslag: egen pin, standard 9999, bytbar i dialogen — med i E5:s APK-bygge?
 - [ ] I5 Värpinge har ingen Opta → paddan där behöver **K1 Katapult-läge** (appen visar nodens driftkort i stället för Optans). Tas K1 med i E5 (≈1 h i appen, inget i plattformen)?
 
+## E5 byggd (2026-10-20) — vad som finns
+
+**Katapult** (webbstyr-energy-platform 63fd1fd + 6b47ec6 + cc3ec14, deployat på Pi5):
+- Migration **050 `panels`** (tenant, byggnad, zon, label, `device_id`, `token_hash`
+  = sha256, `push_minutes` 10, `offline_minutes` 30, `charge_alarm_hours` 4,
+  `last_seen`, `last_charging_at`, `last_payload`, `alarm_state`).
+- `api/routers/panels.py`: CRUD under `/tenants/{t}/buildings/{b}/panels`
+  (token visas en gång, nytt token, ta bort), **`POST /panel/push`** med
+  Bearer-paneltoken (gzip ok): panelens enhet (generic, "Katapult-panel") får
+  `battery`/`charging`/`optas_ok` + `online_<id>=1`; varje Opta i pushen blir
+  en enhet ("Opta via panel", larmblockering *Alltid*) eller — om id:t redan
+  finns, t.ex. den pollade `opta-testbank` — den befintliga; Optans råa JSON
+  döps om med en Python-port av OptaClient.collect (82 taggar på bänk-Optans
+  JSON, identiska namn). Larm `opta_unreachable`/`panel_not_charging` via
+  larmbryggan vid övergångar; vakt var 60 s sätter `online_<id>=0` vid
+  tystnad → röstlarmets `device_offline`.
+- Enheter → **Paneler** (`PanelsSection.tsx`): lista (status, batteri, nät,
+  Optor med kortnamn/seq, app-version, senast), ny panel med token-ruta, ändra,
+  nytt token, ta bort.
+- Lärdom: enhets-id ska behålla bindestreck (`device_slug`), inte block-slugify
+  — första testet skapade `opta_testbank` bredvid `opta-testbank`.
+
+**APK** (5e79697): `Reporter.kt` (push var N:e min, första efter 30 s,
+omförsök efter 2 min vid fel, gzip, nätval subnät→internet→standard, batteri/
+laddare/nät/modell + Optans status/fb/service/map/curves/channels/info —
+status krävs, resten bäst möjliga), **K2** pin på volym-ned-dialogen (standard
+9999, 4–8 siffror, varning i dialogen tills bytt), **K1** Katapult-läge
+(radio Opta-HMI/Katapult-driftkort + adress till nodens scada-sida; rapporten
+bär då bara plattans hälsa), "Skicka nu" med kvitto i dialogen.
+
+**Pushformat** (`optas[]` = en del per Opta, förberett för E6):
+`{"app":{"version"},"tablet":{"battery","charging","network","model","android","uptime_s"},
+"optas":[{"device","ip","ok","err?","status","fb","service","map","curves","channels","info"}]}`
+→ svar `{"ok","next_minutes","published","server_time"}`.
+
+**Test** (Pi5, `scratchpad/e5_test_pi5.py`): se resultatraden nedan.
+
 ## Panel på LAN mot Katapult (Värpinge) — säkerhetsmodell (2026-10-17)
 
 Johans fråga: kan en panel prata med Katapult på LAN:et? Hos kunden Värpinge
