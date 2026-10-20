@@ -10,6 +10,7 @@ import android.net.Network
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -20,9 +21,12 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -36,22 +40,30 @@ import java.net.URL
  * på 127.0.0.1). Runtimen får bara Optans adress (?opta=) och hämtar
  * driftkortet ur PLC:ns flash (GET /api/hmi/scene). Optan hittas med
  * Katapults UDP-upptäckt; sitter den på en KABEL binds processen till det
- * nätverket (Wi-Fi är redan standardrutt). Inställningar + diagnoslogg: håll
- * volym ned i 3 s. Kiosk: app-fästning, skärmen alltid på, HOME-kategori.
+ * nätverket (Wi-Fi är redan standardrutt).
+ *
+ * Katapult-läge (K1): samma skal visar i stället en Katapult-nods driftkort
+ * (adressen till scada-sidan) — för anläggningar utan Opta (Värpinge).
+ *
+ * Inställningar + diagnoslogg: håll volym ned i 3 s och ange pin (K2,
+ * standard 9999). Kiosk: app-fästning, skärmen alltid på, HOME-kategori.
+ * Rapportören (E5) pushar hälsa + Optans värden till Katapult, se Reporter.
  */
 class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var overlay: TextView
     private lateinit var server: AssetServer
     private lateinit var prefs: SharedPreferences
+    private lateinit var reporter: Reporter
     private val ui = Handler(Looper.getMainLooper())
     private var volDownSince = 0L
     private var currentIp: String? = null
+    private var currentName: String? = null
     private var boundTo: String = "ingen"
     private val holdCheck = Runnable {
         if (volDownSince != 0L && System.currentTimeMillis() - volDownSince >= HOLD_MS) {
             volDownSince = 0L
-            openSettings(null)
+            askPin { openSettings(null) }
         }
     }
     private val retry = Runnable { web.reload() }
@@ -59,15 +71,22 @@ class MainActivity : Activity() {
     companion object {
         private const val HOLD_MS = 3000L
         private const val FALLBACK_IP = "192.168.200.1"   // Optans passiva fallback utan DHCP
+        private const val DEFAULT_PIN = "9999"
+        private const val MODE_OPTA = "opta"
+        private const val MODE_KATAPULT = "katapult"
     }
+
+    private fun mode(): String = prefs.getString("mode", MODE_OPTA) ?: MODE_OPTA
+    private fun pin(): String = prefs.getString("pin", DEFAULT_PIN) ?: DEFAULT_PIN
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("opta", Context.MODE_PRIVATE)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        Diag.log("start, version ${versionName()}")
+        Diag.log("start, version ${versionName()}, läge ${mode()}")
 
         server = AssetServer(assets).also { it.start() }
+        reporter = Reporter(this, ui)
 
         web = WebView(this)
         web.settings.apply {
@@ -90,12 +109,12 @@ class MainActivity : Activity() {
                     bindTo(null, "sidfel")
                     Thread({ Diag.log("självtest efter sidfel: ${server.selfTest()}") }, "selftest").start()
                 }
-                showOverlay("Kunde inte ladda $msg\n\nFörsöker igen om 10 s. Volym ned 3 s = diagnos.\n\n" + Diag.tail(8))
+                showOverlay("Kunde inte ladda $msg\n\nFörsöker igen om 10 s. Volym ned 3 s = inställningar.\n\n" + Diag.tail(8))
                 ui.removeCallbacks(retry)
                 ui.postDelayed(retry, 10000)
             }
             override fun onPageFinished(view: WebView, url: String) {
-                if (url.startsWith("http://127.0.0.1")) overlay.visibility = View.GONE
+                if (url.startsWith("http://127.0.0.1") || mode() == MODE_KATAPULT) overlay.visibility = View.GONE
             }
         }
 
@@ -117,8 +136,12 @@ class MainActivity : Activity() {
             try { startLockTask() } catch (e: Exception) { Diag.log("startLockTask: ${e.message}") }
         }
         Thread({ Diag.log("självtest assetserver: ${server.selfTest()}") }, "selftest").start()
-        showSplash("Söker Optan…")
-        connect()
+        // Rapportören läser Optan bara i Opta-läget; i Katapult-läget bara plattans hälsa.
+        reporter.start {
+            val ip = currentIp
+            if (mode() == MODE_OPTA && ip != null) listOf(ip to (currentName ?: "opta")) else emptyList()
+        }
+        if (mode() == MODE_KATAPULT) loadKatapult() else { showSplash("Söker Optan…"); connect() }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -164,7 +187,7 @@ class MainActivity : Activity() {
                     else -> null
                 }
                 when {
-                    chosen != null -> { bindFor(chosen); load(chosen.ip) }
+                    chosen != null -> { currentName = chosen.name; bindFor(chosen); load(chosen.ip) }
                     hits.size > 1 -> chooseAmong(hits)
                     saved != null -> { Diag.log("ingen Opta svarade — laddar sparad adress $saved ändå"); bindTo(null, "sparad adress"); load(saved) }
                     else -> openSettings("Hittade ingen Opta på nätet — ange adressen.")
@@ -203,11 +226,22 @@ class MainActivity : Activity() {
         web.loadUrl(url)
     }
 
+    /** K1: Katapult-nodens egna driftkort i samma skal. Ingen Opta, ingen bindning. */
+    private fun loadKatapult() {
+        val url = (prefs.getString("kat_scada_url", "") ?: "").trim()
+        currentIp = null
+        bindTo(null, "Katapult-läge")
+        if (url.isEmpty()) { openSettings("Katapult-läge: ange adressen till nodens driftkort."); return }
+        Diag.log("laddar Katapult $url")
+        overlay.visibility = View.GONE
+        web.loadUrl(url)
+    }
+
     private fun chooseAmong(hits: List<Discovery.Hit>) {
         val names = hits.map { "${it.name} · ${it.ip}" }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Flera Optor hittades")
-            .setItems(names) { _, i -> bindFor(hits[i]); load(hits[i].ip) }
+            .setItems(names) { _, i -> currentName = hits[i].name; bindFor(hits[i]); load(hits[i].ip) }
             .setCancelable(false)
             .show()
     }
@@ -228,24 +262,91 @@ class MainActivity : Activity() {
         }, "opta-test").start()
     }
 
-    // ── Inställningar + diagnos (volym ned 3 s) ────────────────────────────
+    // ── Pin (K2) ───────────────────────────────────────────────────────────
+
+    private fun askPin(then: () -> Unit) {
+        val field = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            hint = "Pin"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Inställningar")
+            .setMessage("Ange pin")
+            .setView(field)
+            .setPositiveButton("OK") { _, _ ->
+                if (field.text.toString() == pin()) then()
+                else { Diag.log("fel pin"); Toast.makeText(this, "Fel pin", Toast.LENGTH_SHORT).show() }
+            }
+            .setNegativeButton("Avbryt", null)
+            .show()
+        field.requestFocus()
+    }
+
+    // ── Inställningar + diagnos (volym ned 3 s + pin) ──────────────────────
 
     private fun openSettings(note: String?) {
         val d = resources.displayMetrics.density
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = (16 * d).toInt()
-            setPadding(pad, pad, pad, 0)
-        }
+        val pad = (16 * d).toInt()
+        fun label(t: String) = TextView(this).apply { text = t; setPadding(0, (10 * d).toInt(), 0, 0); textSize = 12f }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, 0) }
+
         val info = TextView(this).apply {
             text = (if (note != null) "$note\n\n" else "") +
-                "Opta: ${currentIp ?: "—"}   App: ${versionName()}\n" +
-                "Assetserver: 127.0.0.1:${server.port} (${server.requests} anrop)   Nätbindning: $boundTo\n" +
-                "Kiosk (fäst app): ${if (prefs.getBoolean("kiosk", false)) "PÅ" else "AV"}"
+                "App: ${versionName()}   Läge: ${if (mode() == MODE_KATAPULT) "Katapult" else "Opta-HMI"}\n" +
+                "Opta: ${currentIp ?: "—"}   Nätbindning: $boundTo\n" +
+                "Assetserver: 127.0.0.1:${server.port} (${server.requests} anrop)\n" +
+                "Kiosk (fäst app): ${if (prefs.getBoolean("kiosk", false)) "PÅ" else "AV"}" +
+                (if (pin() == DEFAULT_PIN) "   Pin: standard ($DEFAULT_PIN) — byt!" else "") + "\n" +
+                "Rapport till Katapult: ${if (reporter.enabled) reporter.lastResult else "av"}"
         }
+
+        // Läge
+        val modes = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val rbOpta = RadioButton(this).apply { text = "Opta-HMI"; id = 1 }
+        val rbKat = RadioButton(this).apply { text = "Katapult-driftkort"; id = 2 }
+        modes.addView(rbOpta); modes.addView(rbKat)
+        modes.check(if (mode() == MODE_KATAPULT) 2 else 1)
+
         val ipField = EditText(this).apply {
             hint = "Optans adress"
             setText(currentIp ?: prefs.getString("ip", null) ?: FALLBACK_IP)
+            setSingleLine(true)
+        }
+        val scadaField = EditText(this).apply {
+            hint = "Katapult-läge: adress till driftkorten, t.ex. https://nod/scada"
+            setText(prefs.getString("kat_scada_url", "") ?: "")
+            setSingleLine(true)
+        }
+
+        // Rapportören
+        val urlField = EditText(this).apply {
+            hint = "Katapult-URL (API), t.ex. http://192.168.1.178:8000"
+            setText(prefs.getString("kat_url", "") ?: "")
+            setSingleLine(true)
+        }
+        val tokenField = EditText(this).apply {
+            hint = if (reporter.token().isNotEmpty()) "Paneltoken (sparat — tomt = behåll, - = ta bort)" else "Paneltoken från Katapult (Enheter → Paneler)"
+            setSingleLine(true)
+        }
+        val minutesField = EditText(this).apply {
+            hint = "Intervall (min)"
+            setText(reporter.minutes().toString())
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+        }
+        val pushStatus = TextView(this).apply { text = reporter.lastResult; textSize = 11f }
+        val sendNow = Button(this).apply {
+            text = "Skicka nu"
+            setOnClickListener {
+                // Spara fälten först så "Skicka nu" använder det som står i rutan.
+                saveReporterFields(urlField, tokenField, minutesField)
+                pushStatus.text = "skickar…"
+                reporter.sendAsync { r -> pushStatus.text = r }
+            }
+        }
+        val pinField = EditText(this).apply {
+            hint = "Ny pin (tomt = behåll)"
+            inputType = InputType.TYPE_CLASS_NUMBER
             setSingleLine(true)
         }
         val diag = TextView(this).apply {
@@ -253,31 +354,64 @@ class MainActivity : Activity() {
             textSize = 11f
             typeface = android.graphics.Typeface.MONOSPACE
         }
-        val scroll = ScrollView(this).apply {
+        val diagScroll = ScrollView(this).apply {
             addView(diag)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (220 * d).toInt())
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (180 * d).toInt())
         }
+
         box.addView(info)
-        box.addView(ipField)
-        box.addView(TextView(this).apply { text = "Diagnoslogg"; setPadding(0, (8 * d).toInt(), 0, 0) })
-        box.addView(scroll)
+        box.addView(label("Läge")); box.addView(modes)
+        box.addView(ipField); box.addView(scadaField)
+        box.addView(label("Rapportera till Katapult (Enheter → Paneler)"))
+        box.addView(urlField); box.addView(tokenField); box.addView(minutesField)
+        box.addView(pushStatus); box.addView(sendNow)
+        box.addView(label("Pin för den här dialogen")); box.addView(pinField)
+        box.addView(label("Diagnoslogg")); box.addView(diagScroll)
+        val outer = ScrollView(this).apply { addView(box) }
+
         val dlg = AlertDialog.Builder(this)
             .setTitle("Katapult Opta HMI")
-            .setView(box)
-            .setPositiveButton("Använd adressen") { _, _ ->
-                val ip = ipField.text.toString().trim()
-                if (ip.isNotEmpty()) {
-                    showSplash("Ansluter till $ip…")
-                    bindTo(null, "adress inmatad")
-                    testOpta(ip)
-                    load(ip)
+            .setView(outer)
+            .setPositiveButton("Spara") { _, _ ->
+                val newMode = if (modes.checkedRadioButtonId == 2) MODE_KATAPULT else MODE_OPTA
+                val modeChanged = newMode != mode()
+                prefs.edit().putString("mode", newMode).putString("kat_scada_url", scadaField.text.toString().trim()).apply()
+                saveReporterFields(urlField, tokenField, minutesField)
+                val newPin = pinField.text.toString().trim()
+                if (newPin.isNotEmpty()) {
+                    if (newPin.length in 4..8) { prefs.edit().putString("pin", newPin).apply(); Diag.log("pin bytt"); Toast.makeText(this, "Pin bytt", Toast.LENGTH_SHORT).show() }
+                    else Toast.makeText(this, "Pin: 4–8 siffror — inte bytt", Toast.LENGTH_LONG).show()
+                }
+                reporter.restart()
+                if (newMode == MODE_KATAPULT) {
+                    loadKatapult()
+                } else {
+                    val ip = ipField.text.toString().trim()
+                    if (ip.isNotEmpty() && (ip != currentIp || modeChanged)) {
+                        showSplash("Ansluter till $ip…")
+                        bindTo(null, "adress inmatad")
+                        testOpta(ip)
+                        load(ip)
+                    }
                 }
             }
-            .setNeutralButton("Sök igen") { _, _ -> showSplash("Söker Optan…"); connect() }
+            .setNeutralButton("Sök Opta") { _, _ ->
+                prefs.edit().putString("mode", MODE_OPTA).apply()
+                showSplash("Söker Optan…"); connect()
+            }
             .setNegativeButton(if (prefs.getBoolean("kiosk", false)) "Kiosk av" else "Kiosk på") { _, _ -> toggleKiosk() }
             .create()
         dlg.show()
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        diagScroll.post { diagScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun saveReporterFields(urlField: EditText, tokenField: EditText, minutesField: EditText) {
+        val e = prefs.edit()
+        e.putString("kat_url", urlField.text.toString().trim())
+        val t = tokenField.text.toString().trim()
+        if (t == "-") e.putString("kat_token", "") else if (t.isNotEmpty()) e.putString("kat_token", t)
+        minutesField.text.toString().trim().toIntOrNull()?.let { if (it in 1..1440) e.putInt("kat_minutes", it) }
+        e.apply()
     }
 
     private fun toggleKiosk() {

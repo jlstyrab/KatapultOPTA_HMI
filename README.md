@@ -16,8 +16,9 @@ Allt som är tänkt, beslutat och verifierat står i **[docs/DESIGN.md](docs/DES
 3. Starta appen. Den söker Optan på nätet med Katapults UDP-upptäckt och
    visar driftkortet som ligger i PLC:n. Hittas ingen: ange adressen
    (direktkabel utan router: Optan svarar på `192.168.200.1`).
-4. **Inställningar:** håll **volym ned i 3 s** — Optans adress, Sök igen,
-   kiosk (fäst app) på/av, version.
+4. **Inställningar:** håll **volym ned i 3 s** och ange pin (standard
+   **9999**, byt den i dialogen) — läge, Optans adress, Sök Opta, rapport
+   till Katapult, kiosk (fäst app) på/av, diagnoslogg, version.
 5. Vill du ha appen som startskärm (autostart efter strömavbrott, kiosk utan
    verktyg): välj den som hem-app när Android frågar. Äkta kiosk utan utväg:
    `adb shell dpm set-device-owner se.jlstyr.katapultopta/.MainActivity`
@@ -26,6 +27,27 @@ Allt som är tänkt, beslutat och verifierat står i **[docs/DESIGN.md](docs/DES
 Att titta kräver ingen inloggning. Första ändringen (börvärde, relä,
 tidkanal) ber om Optans lösenord: 1111 Operatör, 2222 Tekniker, 9999 Service
 (standard — byt i Optans HMI under Inställningar → Säkerhet).
+
+## Uppkopplad via plattan (rapport till Katapult)
+
+Plattan kan rapportera till en Katapult-nod var 10:e minut: batteri, laddare,
+nät och Optans alla värden (samma taggnamn som driftkorten). I Katapult:
+**Enheter → Paneler → Ny panel** ger ett token som visas en gång. I appen
+(volym ned 3 s → pin): **Katapult-URL** (API:t, t.ex. `http://192.168.1.178:8000`
+eller `https://nod`) + **paneltoken** → Spara, eller **Skicka nu** för kvitto.
+Katapult larmar vid tystnad (`device_offline`, 30 min), Opta som inte svarar
+(`opta_unreachable`) och utebliven laddning (`panel_not_charging`, 4 h).
+Anropet går bara utåt, över det nät som når adressen (LAN först, annars
+internet) — plattan lyssnar inte på något nät och behöver inget internet på
+LAN.
+
+## Katapult-läge (utan Opta)
+
+Läge **Katapult-driftkort** i dialogen + adressen till nodens driftkort
+(t.ex. `https://nod/scada` eller `http://192.168.1.178:8085/`) visar
+Katapults egna driftkort i samma kiosk-skal. Rapporten innehåller då bara
+plattans hälsa. Ändringar i kortet styrs av Katapults lösenläge
+(Inställningar → Säkerhet & sessioner → `scada_control_auth = password`).
 
 ## Bygga
 

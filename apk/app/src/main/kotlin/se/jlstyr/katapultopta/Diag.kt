@@ -21,6 +21,9 @@ object Diag {
     }
 
     @Synchronized
+    fun now(): String = fmt.format(Date())
+
+    @Synchronized
     fun text(): String = sb.toString()
 
     @Synchronized
