@@ -3,7 +3,7 @@
 **Status:** E1 (OptaClient), E2 (inloggning + MANUAL-relä i firmwaren) och E3
 (driftkortspaketet i Optans flash + "Skicka till Optan") byggda och verifierade
 2026-10-16, E3 end-to-end via Pi5:s byggläge → plattform → poller → bänk-Opta →
-runtime. Kvar: E5 uppkoppling via platta + Opta-ping, E6 flera Optor per panel, E7 router-läge. Senast uppdaterad 2026-10-18.
+runtime. E5 uppkoppling via platta + Opta-ping BYGGD 2026-10-20 (paddtest kvar). Kvar: E6 flera Optor per panel, E7 router-läge. Senast uppdaterad 2026-10-20.
 Dokumentet är den levande sanningen för spåret: beslut spikas här med datum,
 öppna frågor står kvar tills de är stängda, parkerade idéer glöms inte.
 
@@ -612,7 +612,19 @@ bär då bara plattans hälsa), "Skicka nu" med kvitto i dialogen.
 "optas":[{"device","ip","ok","err?","status","fb","service","map","curves","channels","info"}]}`
 → svar `{"ok","next_minutes","published","server_time"}`.
 
-**Test** (Pi5, `scratchpad/e5_test_pi5.py`): se resultatraden nedan.
+**Test** (Pi5 2026-10-20, `scratchpad/e5_test_pi5.py`, 25 kontroller gröna):
+panel "Bänk" skapad via API:t → push med bänk-Optans JSON (gzip) → 200,
+85 taggar publicerade, enheterna `panel-bank` (Katapult-panel) och `bank-opta`
+(Opta via panel, larmblockering Alltid) skapade, `rad1_regulator_pv` 12,5 i
+Redis, 92 rader i sensor_readings, listan visar online + kortet "Hysteres-test
+(Opta)" seq 4; `ok:false` → `opta_unreachable` aktivt, nästa ok → löst;
+5 h utan laddare → `panel_not_charging` (batteri 31 %), laddare i → löst;
+`last_seen` 31 min bak → vakten satte `online_panel-bank=0` inom 90 s →
+röstlarmet `device_offline` ("offline sedan 32 min") → push → 1 → auto-löst;
+fel token 401, nytt token dödar det gamla. **APK 0.1.12** byggd i CI (körning
+12) och ligger i release `latest`. **Paddtest kvar** (Johan): installera,
+volym ned 3 s → pin 9999 → Katapult-URL `http://192.168.1.109:8000` + nytt
+token från Enheter → Paneler → Bänk (nyckelikonen) → Skicka nu.
 
 ## Panel på LAN mot Katapult (Värpinge) — säkerhetsmodell (2026-10-17)
 
@@ -791,7 +803,7 @@ nodens adress i dialogen; lösenläget på i Katapult.
 | E2 | **KLAR 2026-10-16** (optaModbusRemoteIO: `auth.h/.cpp`, gate + `/api/login|logout|password|relay` i `web_server.cpp`, `modbusSetManualCoil`, CLI `losen`, parserfix; teknikersidan: token i `optaFetch`, inloggningsruta, Säkerhet-kort, 🔒/🔓-pill; docs + CLAUDE.md). Flashad på bänk-Optan (498 500 B). 27 API-kontroller gröna (`scratchpad/e2_test.py`): nivåer, 401/403/429, relä via MANUAL (R3 slog fysiskt), parserfix, lösenordsbyte, spärr. Tokentest: 7 skrivningar/2 min på en token, 34–131 ms. Runtime: `switchDevice` → `/api/relay`, Opta-fel visas i klartext, cachad token släpps vid "inloggning krävs"; D4-flödet verifierat i webbläsare (ruta vid Skriv → 1111 → skrivning → token 10 min). D12 stängd | optaModbusRemoteIO + katapult-scada |
 | E3 | **BYGGD 2026-10-16**, fyra lager: (1) firmware `hmi_store.h/.cpp` (A/B-slot à 256 KB, header sist, CRC32) + `GET /api/hmi/scene|info`, `POST begin/chunk/end/clear` (nivå 2, binär chunk-body, path/query-split) — bänktest `scratchpad/e3_upload.py`: upp/läs tillbaka byte för byte, A/B-byte seq+1, CRC-fel lämnar gamla, 401, clear → 404 (optaModbusRemoteIO 41cf27a); (2) runtime: paketkälla (`resolveProject`/`readFile`), Optans paket vinner över lokala filer, `?pkg=local`, omladdning vid ny CRC var 5:e min — verifierat: dev-servern renderar kortet ur Optans flash (katapult-scada 94741e7); (3) plattform: `api/opta_hmi.py` bygger paketet ur scada-containern, `POST/GET …/poll-devices/{id}/opta-hmi`, pollern `opta_hmi_push` (login nivå 2, begin/chunk/end med omförsök + offset-skydd), migration 047 `http_password` krypterat (`api/secretbox.py`), 🔑 i Modbus-vyn (2acfe09); (4) byggläget: "⇪ Skicka till Optan…" med dialog (host.ts + editor/media/main.js). **E2E KLAR 2026-10-16 via Pi5:** lösenord satt på opta-testbank via API:t (PATCH http_password), `POST …/opta-hmi {scene_ids:["hyst-test"]}` → paket 2305 B rå / 797 B gz, upp på 2,9 s, slot A seq 3, audit-rad `opta_hmi_push` status sent; runtimen med bara `?opta=192.168.1.117` laddade "Hysteres-test (Opta)" ur Optan med kurvkortet live. Deploy: plattform 2acfe09 + migration 047 på Pi5 (api, poller, frontend), scada via bundle scada-20261016a | alla tre + KatapultOPTA_HMI |
 | E4 | **BYGGD 2026-10-16** (commit f9d57ed): `apk/` Gradle-projekt utan bibliotek — `MainActivity` (WebView, kiosk via startLockTask, skärm alltid på, immersive, volym ned 3 s → inställningar, Back blockerad), `AssetServer` (HTTP på 127.0.0.1 ur assets/www), `Discovery` (UDP 5000 per nätverk, Ethernet först, broadcast + subnät, multicast-lås, `bindProcessToNetwork`), `BootReceiver` + HOME-kategori. Runtime 94741e7 inbäddad via `tools/sync-runtime.sh`. Repot publikt på **https://github.com/jlstyrab/KatapultOPTA_HMI** (MIT), `.github/workflows/apk.yml` bygger debug-APK vid push och lägger den som förhandsrelease `latest`. **CI grönt 2026-10-16** (andra körningen, 6c336cf): APK:n ligger på https://github.com/jlstyrab/KatapultOPTA_HMI/releases/download/latest/KatapultOPTA_HMI.apk. Lärdom: `android-actions/setup-android@v3` faller på det utgångna paketet `tools` — runnerns förinstallerade SDK + `sdkmanager --licenses` räcker. Loggar hämtas via API:t med `git credential fill` (gh saknas) och Authorization får INTE följa med 302:an till blob-lagringen. **Test på Lenovo-paddan återstår** (Johan: installera från länken) | detta repo |
-| E5 | Uppkopplad via platta: status-push (10 min) via LAN eller internet + `POST /panel/push` i Katapult (migration 048 `panels`, Enheter → Paneler), larm `device_offline` 30 min / `opta_unreachable` / `panel_not_charging` 4 h (D16). Öppet: K2 pin (I4), K1 Katapult-läge för Värpinge (I5) | detta repo + webbstyr-energy-platform |
+| E5 | **BYGGD 2026-10-20** (Johan: K1 + K2 med). Katapult 63fd1fd/6b47ec6/cc3ec14: migration **050** `panels`, `api/routers/panels.py` (CRUD + `POST /panel/push` + vakt), Enheter → Paneler; APK 5e79697 (0.1.12): `Reporter.kt`, pin (K2), Katapult-läge (K1). Pi5-test 25/25 grönt (se "E5 byggd"). **Paddtest kvar.** | detta repo + webbstyr-energy-platform |
 | E6 | **Spikad 2026-10-18 (D17): flera Optor, en panel.** Runtime: `OptaFleetClient` (en `OptaClient` per Opta, routning på deviceId, sammanslagen katalog/snapshot, anslutning per Opta, token per Opta med tyst återanvändning av koden), paketen hämtas ur alla valda Optor och slås ihop till multi-läget med en "byggnad" per Opta, CRC-omladdning per Opta, onåbar Opta = överlägg på dess byggnad. APK: adresslista ("Alla hittade" eller handskrivna) → `?opta=ip1,ip2`, nätbindning bara när alla ligger på kabel, unicast-ping per sparad adress; övriga inställningar oförändrade; E5-pushen får en del per Opta. Firmware: `discoverySetName(programnamn)`. Test: bänk-Optan + en andra Opta på LAN (eller samma Opta två gånger under olika namn för routningen), byte i byggnadsväljaren, skrivning mot båda med var sin kod, kabel ur ena | katapult-scada + detta repo + optaModbusRemoteIO |
 | E7 | Uppkopplad via router: nätläge i Optans HMI + heartbeat (A) + lyssnare | optaModbusRemoteIO + katapult-stack (nav) |
 | E8 | Tillval: DHCP-server i Optan (noll konfig på plattan), Opta-hostad bundle, SMS-larm från appen | optaModbusRemoteIO / detta repo |
