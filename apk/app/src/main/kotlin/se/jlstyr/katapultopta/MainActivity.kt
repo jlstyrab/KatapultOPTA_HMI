@@ -345,10 +345,8 @@ class MainActivity : Activity() {
 
         // Diagnos (längst ner — inget här ska skrivas ner eller ändras)
         val info = TextView(this).apply {
-            text = "App: ${versionName()}
-" +
-                "Opta: ${currentIp ?: "—"}   Nätbindning: $boundTo
-" +
+            text = "App: ${versionName()}\n" +
+                "Opta: ${currentIp ?: "—"}   Nätbindning: $boundTo\n" +
                 "Assetserver: 127.0.0.1:${server.port} (${server.requests} anrop)"
             textSize = 11f; setTextColor(cHelp); typeface = android.graphics.Typeface.MONOSPACE
         }
