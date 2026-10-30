@@ -287,71 +287,75 @@ class MainActivity : Activity() {
     private fun openSettings(note: String?) {
         val d = resources.displayMetrics.density
         val pad = (16 * d).toInt()
-        fun label(t: String) = TextView(this).apply { text = t; setPadding(0, (10 * d).toInt(), 0, 0); textSize = 12f }
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, 0) }
-
-        val info = TextView(this).apply {
-            text = (if (note != null) "$note\n\n" else "") +
-                "App: ${versionName()}   Läge: ${if (mode() == MODE_KATAPULT) "Katapult" else "Opta-HMI"}\n" +
-                "Opta: ${currentIp ?: "—"}   Nätbindning: $boundTo\n" +
-                "Assetserver: 127.0.0.1:${server.port} (${server.requests} anrop)\n" +
-                "Kiosk (fäst app): ${if (prefs.getBoolean("kiosk", false)) "PÅ" else "AV"}" +
-                (if (pin() == DEFAULT_PIN) "   Pin: standard ($DEFAULT_PIN) — byt!" else "") + "\n" +
-                "Rapport till Katapult: ${if (reporter.enabled) reporter.lastResult else "av"}"
+        // Färger (Johan 2026-10-30: grå text mot svart syntes dåligt): det som
+        // GÄLLER (ifyllda värden, sparat läge) är rött, rubriker och hjälptext
+        // vita. Bakgrunden sätts själv så färgerna håller oavsett
+        // plattans dialogtema.
+        val cText = Color.WHITE
+        val cHelp = Color.parseColor("#e6edf3")
+        val cValue = Color.parseColor("#ff6b6b")
+        fun heading(t: String) = TextView(this).apply {
+            text = t; textSize = 16f; setTextColor(cText); setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, (18 * d).toInt(), 0, (2 * d).toInt())
+        }
+        fun label(t: String) = TextView(this).apply {
+            text = t; textSize = 13f; setTextColor(cText); setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, (10 * d).toInt(), 0, 0)
+        }
+        fun help(t: String) = TextView(this).apply { text = t; textSize = 12f; setTextColor(cHelp) }
+        fun value(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(cValue) }
+        /** Inmatningsfält: värdet rött; ledtexten (syns bara när fältet är
+         *  tomt) vit, så en tom ruta inte ser ifylld ut. */
+        fun input(v: String, hintText: String) = EditText(this).apply {
+            setText(v); hint = hintText; setSingleLine(true); textSize = 15f
+            setTextColor(cValue); setHintTextColor(cHelp)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, 0)
+            setBackgroundColor(Color.parseColor("#161b22"))
         }
 
         // Läge
         val modes = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        val rbOpta = RadioButton(this).apply { text = "Opta-HMI"; id = 1 }
-        val rbKat = RadioButton(this).apply { text = "Katapult-driftkort"; id = 2 }
+        val rbOpta = RadioButton(this).apply { text = "Opta-HMI"; id = 1; setTextColor(cText) }
+        val rbKat = RadioButton(this).apply { text = "Katapult-driftkort"; id = 2; setTextColor(cText) }
         modes.addView(rbOpta); modes.addView(rbKat)
         modes.check(if (mode() == MODE_KATAPULT) 2 else 1)
 
-        val ipField = EditText(this).apply {
-            hint = "Optans adress"
-            setText(currentIp ?: prefs.getString("ip", null) ?: FALLBACK_IP)
-            setSingleLine(true)
-        }
-        val scadaField = EditText(this).apply {
-            hint = "Katapult-läge: adress till driftkorten, t.ex. https://nod/scada"
-            setText(prefs.getString("kat_scada_url", "") ?: "")
-            setSingleLine(true)
-        }
+        val ipField = input(currentIp ?: prefs.getString("ip", null) ?: FALLBACK_IP, "t.ex. 192.168.1.117")
+        val scadaField = input(prefs.getString("kat_scada_url", "") ?: "", "används inte i Opta-HMI")
 
         // Rapportören
-        val urlField = EditText(this).apply {
-            hint = "Katapult-URL (API), t.ex. http://192.168.1.178:8000"
-            setText(prefs.getString("kat_url", "") ?: "")
-            setSingleLine(true)
-        }
-        val tokenField = EditText(this).apply {
-            hint = if (reporter.token().isNotEmpty()) "Paneltoken (sparat — tomt = behåll, - = ta bort)" else "Paneltoken från Katapult (Enheter → Paneler)"
-            setSingleLine(true)
-        }
-        val minutesField = EditText(this).apply {
-            hint = "Intervall (min)"
-            setText(reporter.minutes().toString())
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setSingleLine(true)
-        }
-        val pushStatus = TextView(this).apply { text = reporter.lastResult; textSize = 11f }
+        val urlField = input(prefs.getString("kat_url", "") ?: "", "tomt = ingen rapport")
+        val tokenField = input("", if (reporter.token().isNotEmpty()) "tomt = behåll, - = ta bort" else "klistra in token från Katapult")
+        val minutesField = input(reporter.minutes().toString(), "10").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val pushStatus = help("Senast: ${reporter.lastResult}")
         val sendNow = Button(this).apply {
             text = "Skicka nu"
             setOnClickListener {
                 // Spara fälten först så "Skicka nu" använder det som står i rutan.
                 saveReporterFields(urlField, tokenField, minutesField)
                 pushStatus.text = "skickar…"
-                reporter.sendAsync { r -> pushStatus.text = r }
+                reporter.sendAsync { r -> pushStatus.text = "Senast: $r" }
             }
         }
-        val pinField = EditText(this).apply {
-            hint = "Ny pin (tomt = behåll)"
+        val pinField = input("", "tomt = behåll nuvarande").apply {
             inputType = InputType.TYPE_CLASS_NUMBER
-            setSingleLine(true)
+        }
+
+        // Diagnos (längst ner — inget här ska skrivas ner eller ändras)
+        val info = TextView(this).apply {
+            text = "App: ${versionName()}
+" +
+                "Opta: ${currentIp ?: "—"}   Nätbindning: $boundTo
+" +
+                "Assetserver: 127.0.0.1:${server.port} (${server.requests} anrop)"
+            textSize = 11f; setTextColor(cHelp); typeface = android.graphics.Typeface.MONOSPACE
         }
         val diag = TextView(this).apply {
             text = Diag.text().ifEmpty { "(tom logg)" }
             textSize = 11f
+            setTextColor(cHelp)
             typeface = android.graphics.Typeface.MONOSPACE
         }
         val diagScroll = ScrollView(this).apply {
@@ -359,14 +363,45 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (180 * d).toInt())
         }
 
-        box.addView(info)
-        box.addView(label("Läge")); box.addView(modes)
-        box.addView(ipField); box.addView(scadaField)
-        box.addView(label("Rapportera till Katapult (Enheter → Paneler)"))
-        box.addView(urlField); box.addView(tokenField); box.addView(minutesField)
+        if (note != null) box.addView(value(note))
+        box.addView(help("Rött = det som gäller nu. Vit text i en ruta är bara en ledtext — rutan är tom."))
+
+        box.addView(heading("Läge"))
+        box.addView(help("Opta-HMI: driftkortet ur Optan på nätet. Katapult-driftkort: en Katapult-nods kort i stället."))
+        box.addView(modes)
+        box.addView(value(if (mode() == MODE_KATAPULT) "Gäller: Katapult-driftkort" else "Gäller: Opta-HMI"))
+        box.addView(value("Kiosk (fäst app): ${if (prefs.getBoolean("kiosk", false)) "PÅ" else "AV"} — knappen Kiosk längst ner"))
+
+        box.addView(label("Optans adress"))
+        box.addView(help("PLC:ns IP-adress. \"Sök Opta\" längst ner hittar den automatiskt. Direktkabel utan router: 192.168.200.1."))
+        box.addView(ipField)
+
+        box.addView(label("Driftkortsadress (bara Katapult-läge)"))
+        box.addView(help("Nodens driftkort, t.ex. https://nod/scada. Behövs inte i Opta-HMI."))
+        box.addView(scadaField)
+
+        box.addView(heading("Rapport till Katapult"))
+        box.addView(help("Plattan skickar sin och Optans status till Katapult. Lämna Katapult-URL tom om ni inte använder det."))
+        box.addView(label("Katapult-URL (API)"))
+        box.addView(help("Nodens API, t.ex. http://192.168.1.178:8000"))
+        box.addView(urlField)
+        box.addView(label("Paneltoken"))
+        box.addView(help("Skapas i Katapult under Enheter → Paneler och visas bara en gång där. Här visas den aldrig."))
+        box.addView(value(if (reporter.token().isNotEmpty()) "Gäller: token sparad" else "Gäller: ingen token"))
+        box.addView(tokenField)
+        box.addView(label("Intervall (minuter)"))
+        box.addView(minutesField)
         box.addView(pushStatus); box.addView(sendNow)
-        box.addView(label("Pin för den här dialogen")); box.addView(pinField)
-        box.addView(label("Diagnoslogg")); box.addView(diagScroll)
+
+        box.addView(heading("Pin för den här dialogen"))
+        box.addView(help("4–8 siffror."))
+        box.addView(value(if (pin() == DEFAULT_PIN) "Gäller: standard ($DEFAULT_PIN) — byt!" else "Gäller: egen pin"))
+        box.addView(pinField)
+
+        box.addView(heading("Diagnos"))
+        box.addView(help("Teknisk information för felsökning — inget här behöver skrivas ner."))
+        box.addView(info)
+        box.addView(label("Logg")); box.addView(diagScroll)
         val outer = ScrollView(this).apply { addView(box) }
 
         val dlg = AlertDialog.Builder(this)

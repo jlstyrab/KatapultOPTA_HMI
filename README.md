@@ -13,6 +13,9 @@ Allt som är tänkt, beslutat och verifierat står i **[docs/DESIGN.md](docs/DES
 1. Ladda ner senaste **KatapultOPTA_HMI.apk** från
    [Releases](../../releases) (förhandsreleasen *Senaste bygget* uppdateras vid varje push till main).
 2. Tillåt installation från okända källor när Android frågar, öppna filen.
+   Vägrar Android installera ovanpå en äldre version (varje bygge signeras
+   än så länge med en ny debug-nyckel): skriv ner inställningarna (se
+   nedan), avinstallera den gamla appen och installera igen.
 3. Starta appen. Den söker Optan på nätet med Katapults UDP-upptäckt och
    visar driftkortet som ligger i PLC:n. Hittas ingen: ange adressen
    (direktkabel utan router: Optan svarar på `192.168.200.1`).
@@ -27,6 +30,28 @@ Allt som är tänkt, beslutat och verifierat står i **[docs/DESIGN.md](docs/DES
 Att titta kräver ingen inloggning. Första ändringen (börvärde, relä,
 tidkanal) ber om Optans lösenord: 1111 Operatör, 2222 Tekniker, 9999 Service
 (standard — byt i Optans HMI under Inställningar → Säkerhet).
+
+## Inställningarna på plattan
+
+Håll **volym ned i 3 s** och ange pin. **Rött** är det som gäller nu (ifyllda
+värden och sparat läge). Vit text inne i en ruta är bara en ledtext: rutan
+är tom. Skriv ner de röda värdena innan appen avinstalleras, eftersom
+inställningarna försvinner med den.
+
+| Inställning | Vad den gör | Skriv ner? |
+|-------------|-------------|------------|
+| **Läge** | *Opta-HMI* = driftkortet ur Optan (normalfallet). *Katapult-driftkort* = en Katapult-nods driftkort i stället (se nedan) | ja |
+| **Kiosk (fäst app)** | Plattan låses till appen. Slås på/av med knappen *Kiosk* längst ner | ja |
+| **Optans adress** | PLC:ns IP-adress, t.ex. `192.168.1.117`. *Sök Opta* hittar den automatiskt; direktkabel utan router: `192.168.200.1` | ja |
+| **Driftkortsadress** | Bara i Katapult-läge: nodens driftkort, t.ex. `https://nod/scada` | om ifylld |
+| **Katapult-URL (API)** | Vart plattan rapporterar, t.ex. `http://192.168.1.178:8000`. Tom = ingen rapport | om ifylld |
+| **Paneltoken** | Nyckeln för rapporten. Skapas i Katapult (Enheter → Paneler) och visas bara en gång där, aldrig i appen. Saknas den: skapa en ny panel | spara när den skapas |
+| **Intervall** | Minuter mellan rapporterna (standard 10) | om ändrat |
+| **Pin** | Skyddar den här dialogen. Standard 9999, byt den | om bytt |
+| **Diagnos** | Appversion, nätbindning, assetserver (appens inbyggda webbserver på plattan, 127.0.0.1) och logg — bara för felsökning | nej |
+
+Knapparna: **Spara**, **Sök Opta** (letar upp Optan på nätet) och
+**Kiosk på/av**.
 
 ## Uppkopplad via plattan (rapport till Katapult)
 
