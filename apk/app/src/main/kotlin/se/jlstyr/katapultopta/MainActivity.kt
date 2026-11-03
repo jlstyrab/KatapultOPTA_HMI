@@ -16,6 +16,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -108,6 +109,8 @@ class MainActivity : Activity() {
             useWideViewPort = true
             loadWithOverviewMode = true
         }
+        // Larmvakten: runtimens /api/status-svar (se AssetServer.withAlarmTap) → omedelbar push.
+        web.addJavascriptInterface(PanelBridge(), "KatapultPanel")
         web.webViewClient = object : WebViewClient() {
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
@@ -151,6 +154,13 @@ class MainActivity : Activity() {
             if (mode() == MODE_OPTA && ip != null) listOf(ip to (currentName ?: "opta")) else emptyList()
         }
         if (mode() == MODE_KATAPULT) loadKatapult() else { showSplash("Söker Optan…"); connect() }
+    }
+
+    /** JS-bryggan (anropas på WebView:ns tråd). Bara larmräknare — Reporter
+     *  ignorerar adresser som inte är plattans Opta. */
+    private inner class PanelBridge {
+        @JavascriptInterface
+        fun alarms(host: String, a: Int, b: Int) { reporter.observeAlarms(host, a, b) }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

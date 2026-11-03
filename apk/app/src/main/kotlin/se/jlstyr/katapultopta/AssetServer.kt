@@ -90,7 +90,8 @@ class AssetServer(private val assets: AssetManager) {
                 if (path.contains("..")) path = "/index.html"
                 val out = BufferedOutputStream(c.getOutputStream())
                 try {
-                    val bytes = assets.open("www$path").use { it.readBytes() }
+                    var bytes = assets.open("www$path").use { it.readBytes() }
+                    if (path == "/index.html") bytes = withAlarmTap(bytes)
                     out.write(("HTTP/1.1 200 OK\r\nContent-Type: ${mime(path)}\r\nContent-Length: ${bytes.size}\r\n" +
                         "Cache-Control: no-cache\r\nConnection: close\r\n\r\n").toByteArray(Charsets.ISO_8859_1))
                     out.write(bytes)
@@ -110,6 +111,26 @@ class AssetServer(private val assets: AssetManager) {
             // sådant som inte är det, och låt aldrig tråden dö med undantag.
             if (e !is java.net.SocketTimeoutException) Diag.log("assetserver: ${e.javaClass.simpleName} ${e.message}")
         }
+    }
+
+    /** Larmvakten (Reporter): ett klassiskt skript före runtimens modul lindar
+     *  window.fetch och skickar `alarm_a`/`alarm_b` ur runtimens egna
+     *  GET /api/status till appen (KatapultPanel.alarms). Svaret klonas — runtimen
+     *  märker inget, och Optan får inga extra anrop. */
+    private fun withAlarmTap(html: ByteArray): ByteArray {
+        val s = String(html, Charsets.UTF_8)
+        val at = s.indexOf("<script type=\"module\"")
+        if (at < 0) return html
+        return (s.substring(0, at) + ALARM_TAP + s.substring(at)).toByteArray(Charsets.UTF_8)
+    }
+
+    private companion object {
+        const val ALARM_TAP = "<script>(function(){var P=window.KatapultPanel,f=window.fetch;if(!P||!f)return;" +
+            "window.fetch=function(u,o){var p=f.apply(this,arguments);try{var s=String(u&&u.url||u);" +
+            "if(/\\/api\\/status(\\?|\$)/.test(s)&&!(o&&o.method&&o.method!=='GET')){var h=new URL(s,location.href).host;" +
+            "p.then(function(r){if(r.ok)r.clone().json().then(function(j){" +
+            "var a=typeof j.alarm_a==='number'?j.alarm_a:-1,b=typeof j.alarm_b==='number'?j.alarm_b:-1;" +
+            "if(a>=0||b>=0)P.alarms(h,a,b)}).catch(function(){})}).catch(function(){})}}catch(e){}return p}})();</script>\n"
     }
 
     private fun mime(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {

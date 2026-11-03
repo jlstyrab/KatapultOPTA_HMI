@@ -34,6 +34,12 @@ import java.util.zip.GZIPOutputStream
  * processens standardnät (som kan vara bundet till Optans kabel). Svaret bär
  * next_minutes så servern styr takten, och ibland ett driftkortspaket som
  * budet (Courier) lägger in i Optan direkt efter pushen, på samma tråd.
+ *
+ * Larmvakten (2026-11-03): ändras Optans antal aktiva A- eller B-larm
+ * (`alarm_a`/`alarm_b` i /api/status) pushas direkt, högst en extra push per
+ * 30 s. Värdena kommer i första hand ur runtimens egen statuspollning (var
+ * 3:e s, via JS-bryggan i MainActivity — inga egna anrop mot Optan); är
+ * runtimen tyst i 25 s läser vakten själv.
  */
 class Reporter(private val ctx: Context, private val ui: Handler) {
     private val prefs: SharedPreferences = ctx.getSharedPreferences("opta", Context.MODE_PRIVATE)
@@ -50,6 +56,28 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
         override fun run() { sendAsync(null); schedule(minutes()) }
     }
 
+    // Larmvakten — allt nedan på ui-tråden.
+    private val alarmSeen = HashMap<String, Pair<Int, Int>>()     // ip → (A, B)
+    private val alarmSeenAt = HashMap<String, Long>()             // ip → senaste avläsning (elapsedRealtime)
+    private var lastAlarmPush = -ALARM_GAP_MS
+    private var alarmPushPending = false
+    private val alarmPush = object : Runnable {
+        override fun run() {
+            alarmPushPending = false
+            if (running) { alarmPushPending = true; ui.postDelayed(this, 5000); return }   // vänta ut pågående push
+            lastAlarmPush = SystemClock.elapsedRealtime()
+            sendAsync(null)
+        }
+    }
+    private val alarmWatch = object : Runnable {
+        override fun run() { readAlarmsIfQuiet(); ui.postDelayed(this, 15_000) }
+    }
+
+    companion object {
+        private const val ALARM_GAP_MS = 30_000L      // högst en extra push per 30 s
+        private const val ALARM_QUIET_MS = 25_000L    // runtimen tyst så länge → vakten läser själv
+    }
+
     val enabled: Boolean get() = url().isNotEmpty() && token().isNotEmpty()
     fun url(): String = (prefs.getString("kat_url", "") ?: "").trim().trimEnd('/')
     fun token(): String = (prefs.getString("kat_token", "") ?: "").trim()
@@ -63,9 +91,57 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
 
     fun restart() {
         ui.removeCallbacks(tick)
+        ui.removeCallbacks(alarmWatch)
         if (!enabled) { Diag.log("rapportör: av (ingen Katapult-URL/token)"); return }
         Diag.log("rapportör: var ${minutes()}:e min → ${url()}")
         schedule(0.5)     // första rapporten 30 s efter start
+        ui.postDelayed(alarmWatch, 15_000)
+    }
+
+    // ── Larmvakten ─────────────────────────────────────────────────────────
+
+    /** En avläsning av Optans larmräknare (-1 = fältet saknas). Från vilken tråd som helst.
+     *  `pushing` = avläsningen hör till en push som redan är på väg — bara ny baslinje. */
+    fun observeAlarms(ip: String, a: Int, b: Int, pushing: Boolean = false) {
+        if (a < 0 && b < 0) return                    // äldre firmware utan alarm_a/alarm_b
+        ui.post {
+            if (optas().none { it.first == ip }) return@post
+            alarmSeenAt[ip] = SystemClock.elapsedRealtime()
+            val prev = alarmSeen.put(ip, a to b)
+            if (prev == null || pushing || prev == (a to b) || !enabled) return@post
+            val what = listOfNotNull(
+                if (prev.first != a) "A ${prev.first}→$a" else null,
+                if (prev.second != b) "B ${prev.second}→$b" else null).joinToString(", ")
+            val wait = lastAlarmPush + ALARM_GAP_MS - SystemClock.elapsedRealtime()
+            when {
+                alarmPushPending -> Diag.log("larmändring $what, push redan på väg")
+                wait <= 0 -> { Diag.log("larmändring $what, pushar"); alarmPush.run() }
+                else -> {
+                    Diag.log("larmändring $what, pushar om ${(wait + 999) / 1000} s (spärr 30 s)")
+                    alarmPushPending = true
+                    ui.postDelayed(alarmPush, wait)
+                }
+            }
+        }
+    }
+
+    /** Reserv när runtimen inte pollar (skylt, sidfel, äldre runtime): en lätt egen läsning. */
+    private fun readAlarmsIfQuiet() {
+        if (running) return
+        val now = SystemClock.elapsedRealtime()
+        for ((ip, _) in optas()) {
+            if (now - (alarmSeenAt[ip] ?: 0L) < ALARM_QUIET_MS) continue
+            Thread({
+                try {
+                    val c = URL("http://$ip/api/status").openConnection() as HttpURLConnection
+                    c.connectTimeout = 3000; c.readTimeout = 4000
+                    val text = c.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
+                    c.disconnect()
+                    val j = JSONObject(text)
+                    observeAlarms(ip, j.optInt("alarm_a", -1), j.optInt("alarm_b", -1))
+                } catch (_: Exception) { }   // onåbar Opta syns i nästa push (ok:false)
+            }, "alarm-watch").start()
+        }
     }
 
     private fun schedule(minutes: Number) {
@@ -219,6 +295,7 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
         val o = JSONObject().put("ip", ip)
         try {
             o.put("status", JSONTokener(get("http://$ip/api/status")).nextValue())
+            o.optJSONObject("status")?.let { observeAlarms(ip, it.optInt("alarm_a", -1), it.optInt("alarm_b", -1), pushing = true) }
         } catch (e: Exception) {
             return o.put("ok", false).put("err", "${e.javaClass.simpleName}: ${e.message}")
         }
