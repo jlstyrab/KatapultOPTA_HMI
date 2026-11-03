@@ -78,6 +78,7 @@ i ett projekt.
 | D16 | 2026-10-17 | **Spikat (Johan), E5:** push var 10:e minut, offline-larm efter 30 min; panelen skapas i Katapult (Enheter → Paneler) och token klistras in i appen; batterilarm `panel_not_charging` efter **4 h** utan laddning | Dagens paddor har lång batteritid och ligger inte konstant på laddning — 60 min hade gett falsklarm. K2 (pin på kioskdialogen) beslutas när frågan är förklarad; se LAN-säkerhetsmodellen |
 | D17 | 2026-10-18 | **Spikat (Johan): flera Optor, en panel = egen etapp E6 efter E5.** Flottan bor i panelen: en `OptaClient` per Opta bakom en `OptaFleetClient`, varje Opta behåller sitt eget kortpaket i sin flash, runtimens multi-läge visar en "byggnad" per Opta, token per Opta (samma kod provas tyst), adresslista i appen i stället för en adress. Kiosk/skärm/autostart/pin/diagnos är panelens egna och påverkas inte | Modellen är redan flott-vänlig (prefix i bindningen, zoner i snapshot-ramen, `buildings[]`); ingen plattformsändring, "Skicka till Optan" oförändrat. Se avsnittet "Idé: flera Optor, en panel" |
 | D18 | 2026-10-27 | Första kundkortet (Carlsberg miljöcontainer): switch bunden till en **virtuell DI** skriver via `/api/service type=vdi` (start/stopp = VDI `AUTO`, kvittering = puls-VDI `KVITT_PANEL`), namngivna VAI (`sp_kyla`) är skrivbara, faceplatens `sp`-ingång är skrivbar oavsett taggnamn, och inloggningsrutan i Opta-läget ber om Optans nivålösenord utan användarnamn (katapult-scada af441e0) | Optan tillåter VDI/VAI på nivå 1 (Operatör), så panelen kan starta/stoppa, kvittera och ändra börvärde utan reläväg (D12 står kvar för reläer). Johan provade sitt Katapult-konto mot Optan — texten var fel. `/api/modbus-map` tar 6 s med 39 block och fick 30 s gräns (4 s gjorde att kortet aldrig startade); firmwaren bör göra kartan snabbare |
+| D19 | 2026-11-03 | **Spikat (Johan): plattan är bud för driftkortspaket.** När Katapult inte når Optan (Carlsberg: Opta + platta bakom fabrikens switch, plattan har kundens Wi-Fi uppåt) köar Katapult paketet; push-svaret säger att det väntar, plattan hämtar det över HTTPS med paneltoken och laddar själv upp det till Optan med teknikerlösenordet den har bakom pinnen. Ingen WireGuard, firmwaren oförändrad | Plattan ansluter redan utgående över HTTPS (E5); samma väg bär rapporter och A/B-larm. Demoservern når aldrig Optan i fabriken. Se "Plattan som bud" |
 | D9 | 2026-10-16 | **Förslag, ej spikat:** *Uppkopplad* finns i två varianter — **via platta** (LTE-platta pushar status över HTTPS, ingen firmware) eller **via router** (4G-router med WireGuard till navet, Optan nåbar som en nod) — valet görs per anläggning | Plattan är billigast och räcker för fjärrinsyn; routern vinner där täckningen i skåpet är dålig eller Optan ska nås direkt. Se analysen "LTE-platta som upplänk" |
 
 ## Verifierade fakta som designen vilar på
@@ -626,6 +627,48 @@ fel token 401, nytt token dödar det gamla. **APK 0.1.12** byggd i CI (körning
 12) och ligger i release `latest`. **Paddtest kvar** (Johan): installera,
 volym ned 3 s → pin 9999 → Katapult-URL `http://192.168.1.109:8000` + nytt
 token från Enheter → Paneler → Bänk (nyckelikonen) → Skicka nu.
+
+## Plattan som bud (2026-11-03, D19)
+
+"Skicka till Optan" när Katapults poller inte når Optan. Katapult-sidan
+(webbstyr-energy-platform `api/panel_hmi.py`, migration 051) köar paketet;
+plattan (`Courier.kt`) bär det sista biten. Protokollet, gemensamt med Katapult:
+
+1. Push-svaret får `"hmi":{id,device,size,crc,gzip,name,ts}` och
+   `next_minutes:1` medan paketet väntar. Katapult delar bara ut det till en
+   panel vars senaste push hade Optan `ok:true`.
+2. `GET /panel/hmi/{id}` (Bearer paneltoken) → råa paketbytes. Plattan
+   kontrollerar storlek + CRC32 innan något går till Optan.
+3. Optan väljs bland dem plattan nådde i pushen: `device_slug(device)` som
+   Katapult räknar den (gemener, å/ä → a, ö → o, é → e, annat än `a-z0-9_-` → `-`).
+   Uppladdningen är pollerns `push_opta_hmi` i Kotlin: `POST /api/login pass=`
+   (nivå ≥ 2, ingen omprovning vid fel lösenord — Optans spärr) →
+   `/api/hmi/begin?size&crc&gzip&name&device&ts&token` → `/api/hmi/chunk?off&token`
+   à 4096 B (409 med `expected = off+len` = biten gick in förra försöket) →
+   `/api/hmi/end` → `/api/logout`. Har Optan redan exakt det paketet
+   (`/api/hmi/info` crc + bytes) laddas det inte upp igen — då försvann bara kvittot.
+4. Kvitto `POST /panel/hmi/{id}/result {ok, error?, seq?}` (seq ur `end`-svaret).
+   Utan lösenord: `{ok:false, error:"teknikerlösenord saknas på plattan"}`.
+5. Under uppladdningen visar WebView:n en skylt ("Tar emot nytt driftkort…"),
+   så runtimens pollning släpper Optans få sockets; efteråt laddas kortet om
+   och det nya syns direkt — även vid fel (då kommer det gamla tillbaka).
+
+Allt går på rapportörens tråd, i följd efter pushen, aldrig parallellt med
+nästa push. Teknikerlösenordet ligger i volym-ned-dialogen ("Optans
+teknikerlösenord (nivå 2)", maskerat, tomt = behåll, `-` = ta bort), krypterat
+med en AES-nyckel i Android Keystore (`Secret.kt` — samma idé som
+EncryptedSharedPreferences, utan AndroidX; går Keystore inte att använda sparas
+det okrypterat och det loggas). Det skickas aldrig till Katapult. Diagnosloggen
+visar varje steg med prefixet `bud:`.
+
+**Test 2026-11-03** (scratchpad, ingen Opta skriven): Kotlin-koden kompilerad
+mot Android 14-ramverket (kotlinc 1.9.24 + Robolectrics `android-all`), och
+uppladdningen körd på JVM mot en fejkad Opta i Python med firmwarens regler
+(offset, CRC i `end`, token i query/formulär, ett tappat chunk-svar): rätt
+lösenord → ok seq+1; nivå 1 → "ger inte nivå 2"; fel lösenord → "fel
+lösenord". Lärdom: JDK:ns HttpURLConnection tappar felkroppen på 401 i
+strömningsläge, så Optan-anropen buffras. **Kvar:** APK-bygget i CI (kräver
+push) och provet mot riktig Katapult + bänk-Optan (skrivning kräver Johans OK).
 
 ## Panel på LAN mot Katapult (Värpinge) — säkerhetsmodell (2026-10-17)
 

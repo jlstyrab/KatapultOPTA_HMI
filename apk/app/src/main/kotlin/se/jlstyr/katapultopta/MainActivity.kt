@@ -47,7 +47,8 @@ import java.net.URL
  *
  * Inställningar + diagnoslogg: håll volym ned i 3 s och ange pin (K2,
  * standard 9999). Kiosk: app-fästning, skärmen alltid på, HOME-kategori.
- * Rapportören (E5) pushar hälsa + Optans värden till Katapult, se Reporter.
+ * Rapportören (E5) pushar hälsa + Optans värden till Katapult, se Reporter;
+ * budet (Courier) lägger in driftkortspaket som Katapult köat för Optan.
  */
 class MainActivity : Activity() {
     private lateinit var web: WebView
@@ -55,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var server: AssetServer
     private lateinit var prefs: SharedPreferences
     private lateinit var reporter: Reporter
+    private lateinit var courier: Courier
     private val ui = Handler(Looper.getMainLooper())
     private var volDownSince = 0L
     private var currentIp: String? = null
@@ -87,6 +89,13 @@ class MainActivity : Activity() {
 
         server = AssetServer(assets).also { it.start() }
         reporter = Reporter(this, ui)
+        // Budet pausar driftkortet under uppladdningen (runtimens pollning
+        // släpper Optans sockets) och laddar sedan om det — nya kortet syns direkt.
+        courier = Courier(this, reporter, object : Courier.Screen {
+            override fun pause(text: String) { ui.post { if (mode() == MODE_OPTA) showSplash(text) } }
+            override fun resume() { ui.post { if (mode() == MODE_OPTA) currentIp?.let { load(it) } } }
+        })
+        reporter.courier = courier
 
         web = WebView(this)
         web.settings.apply {
@@ -339,6 +348,9 @@ class MainActivity : Activity() {
                 reporter.sendAsync { r -> pushStatus.text = "Senast: $r" }
             }
         }
+        val passField = input("", if (Secret.has(prefs, Courier.PASS_KEY)) "tomt = behåll, - = ta bort" else "Optans lösenord för nivå 2").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
         val pinField = input("", "tomt = behåll nuvarande").apply {
             inputType = InputType.TYPE_CLASS_NUMBER
         }
@@ -391,6 +403,14 @@ class MainActivity : Activity() {
         box.addView(minutesField)
         box.addView(pushStatus); box.addView(sendNow)
 
+        box.addView(heading("Driftkort från Katapult"))
+        box.addView(help("Katapult kan skicka ett nytt driftkort via plattan (\"Skicka till Optan\" i redigeraren). " +
+            "Plattan loggar då in på Optan med lösenordet nedan. Det sparas krypterat här och skickas aldrig till Katapult."))
+        box.addView(label("Optans teknikerlösenord (nivå 2)"))
+        box.addView(value(if (Secret.has(prefs, Courier.PASS_KEY)) "Gäller: lösenord sparat" else "Gäller: inget lösenord — driftkort från Katapult avvisas"))
+        box.addView(passField)
+        box.addView(help("Senast: ${courier.lastResult}"))
+
         box.addView(heading("Pin för den här dialogen"))
         box.addView(help("4–8 siffror."))
         box.addView(value(if (pin() == DEFAULT_PIN) "Gäller: standard ($DEFAULT_PIN) — byt!" else "Gäller: egen pin"))
@@ -410,6 +430,9 @@ class MainActivity : Activity() {
                 val modeChanged = newMode != mode()
                 prefs.edit().putString("mode", newMode).putString("kat_scada_url", scadaField.text.toString().trim()).apply()
                 saveReporterFields(urlField, tokenField, minutesField)
+                val newPass = passField.text.toString()
+                if (newPass.trim() == "-") { Secret.put(prefs, Courier.PASS_KEY, ""); Diag.log("teknikerlösenord borttaget") }
+                else if (newPass.isNotEmpty()) { Secret.put(prefs, Courier.PASS_KEY, newPass); Diag.log("teknikerlösenord sparat") }
                 val newPin = pinField.text.toString().trim()
                 if (newPin.isNotEmpty()) {
                     if (newPin.length in 4..8) { prefs.edit().putString("pin", newPin).apply(); Diag.log("pin bytt"); Toast.makeText(this, "Pin bytt", Toast.LENGTH_SHORT).show() }

@@ -32,7 +32,8 @@ import java.util.zip.GZIPOutputStream
  * Nätval: anropet provas via det nät vars subnät innehåller Katapult-adressen
  * (LAN-fallet, Värpinge), sedan nät med internet (validerade först), sedan
  * processens standardnät (som kan vara bundet till Optans kabel). Svaret bär
- * next_minutes så servern styr takten.
+ * next_minutes så servern styr takten, och ibland ett driftkortspaket som
+ * budet (Courier) lägger in i Optan direkt efter pushen, på samma tråd.
  */
 class Reporter(private val ctx: Context, private val ui: Handler) {
     private val prefs: SharedPreferences = ctx.getSharedPreferences("opta", Context.MODE_PRIVATE)
@@ -41,6 +42,10 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
     @Volatile private var running = false
     private var optas: () -> List<Pair<String, String>> = { emptyList() }   // (ip, reservnamn)
     private var retried = false
+    /** Budet för driftkortspaket ur push-svaret; sätts av MainActivity. */
+    var courier: Courier? = null
+    /** (ip, device) för Optorna som svarade i senaste pushen — budets adressbok. */
+    @Volatile private var reachable: List<Pair<String, String>> = emptyList()
     private val tick = object : Runnable {
         override fun run() { sendAsync(null); schedule(minutes()) }
     }
@@ -73,24 +78,38 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
         if (running) { done?.invoke("en rapport pågår redan"); return }
         running = true
         Thread({
-            val r = try { sendOnce() } catch (e: Exception) { "FEL ${e.javaClass.simpleName}: ${e.message}" } finally { running = false }
-            lastResult = "${Diag.now()} $r"
-            Diag.log("rapportör: $r")
-            // Ett misslyckande → ett snabbt omförsök efter 2 min, sedan ordinarie takt.
-            if (r.startsWith("FEL") && !retried) { retried = true; ui.post { schedule(2) } } else retried = false
-            if (done != null) ui.post { done(r) }
+            var hmi: JSONObject? = null
+            try {
+                val r = try { sendOnce { hmi = it } } catch (e: Exception) { "FEL ${e.javaClass.simpleName}: ${e.message}" }
+                lastResult = "${Diag.now()} $r"
+                Diag.log("rapportör: $r")
+                // Ett misslyckande → ett snabbt omförsök efter 2 min, sedan ordinarie takt.
+                if (r.startsWith("FEL") && !retried) { retried = true; ui.post { schedule(2) } } else retried = false
+                if (done != null) ui.post { done(r) }
+                // Ett väntande driftkortspaket: i följd efter pushen, aldrig parallellt med nästa.
+                hmi?.let { p ->
+                    val c = courier
+                    if (c == null) Diag.log("bud: paket i push-svaret men inget bud") else
+                        try { c.deliver(p) } catch (e: Exception) { Diag.log("bud: FEL ${e.javaClass.simpleName}: ${e.message}") }
+                }
+            } finally { running = false }
         }, "reporter").start()
     }
 
     // ── Paketet ────────────────────────────────────────────────────────────
 
-    private fun sendOnce(): String {
+    /** Optorna plattan nådde i senaste pushen, som (ip, device). */
+    fun reachableOptas(): List<Pair<String, String>> = reachable
+
+    private fun sendOnce(onHmi: (JSONObject) -> Unit): String {
         val body = JSONObject()
         body.put("app", JSONObject().put("version", versionName()))
         body.put("tablet", tablet())
         val arr = JSONArray()
         for ((ip, name) in optas()) arr.put(collectOpta(ip, name))
         body.put("optas", arr)
+        reachable = (0 until arr.length()).map { arr.getJSONObject(it) }
+            .filter { it.optBoolean("ok") }.map { it.getString("ip") to it.optString("device") }
         val raw = body.toString().toByteArray(Charsets.UTF_8)
         val gz = ByteArrayOutputStream().also { bo -> GZIPOutputStream(bo).use { it.write(raw) } }.toByteArray()
 
@@ -116,6 +135,7 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
                         prefs.edit().putInt("kat_minutes", next).apply()
                         ui.post { schedule(next) }
                     }
+                    j.optJSONObject("hmi")?.let(onHmi)
                     return "ok ${raw.size} B (${gz.size} B gz), ${arr.length()} Opta → ${j.optInt("published", -1)} taggar, nästa om ${minutes()} min via ${describe(n)}"
                 }
                 // Servern nådd men sa nej (fel token, 4xx/5xx): inte nätets fel.
@@ -126,6 +146,35 @@ class Reporter(private val ctx: Context, private val ui: Handler) {
             }
         }
         return "FEL $lastErr"
+    }
+
+    /** Ett anrop till Katapult (paneltoken, samma nätval som pushen) → (HTTP-kod, svarets bytes).
+     *  Kastar bara när inget nät nådde servern. */
+    fun katapult(method: String, path: String, body: ByteArray?, type: String?): Pair<Int, ByteArray> {
+        val target = URL(url() + path)
+        var lastErr = "inget nätverk att nå Katapult över"
+        for (n in candidateNetworks(target.host)) {
+            try {
+                val c = (if (n == null) target.openConnection() else n.openConnection(target)) as HttpURLConnection
+                c.connectTimeout = 10_000; c.readTimeout = 30_000
+                c.requestMethod = method
+                c.setRequestProperty("Authorization", "Bearer ${token()}")
+                if (body != null) {
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type", type ?: "application/octet-stream")
+                    c.setFixedLengthStreamingMode(body.size)
+                    c.outputStream.use { it.write(body) }
+                }
+                val code = c.responseCode
+                val bytes = (if (code < 400) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+                c.disconnect()
+                return code to bytes
+            } catch (e: Exception) {
+                lastErr = "${e.javaClass.simpleName}: ${e.message} (via ${describe(n)})"
+                Diag.log("bud: $method $path: $lastErr")
+            }
+        }
+        throw java.io.IOException(lastErr)
     }
 
     private fun versionName(): String =
