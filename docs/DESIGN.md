@@ -863,3 +863,7 @@ nodens adress i dialogen; lösenläget på i Katapult.
 - Plattan hämtar scen direkt från Katapult-servern ("Hämta ny version") — överflödigt om scenen bor i Optan.
 - SMS-larm/SMS-status från appen — tillval i väg B, kräver SIM med SMS.
 - Fjärrstyrning via plattans push-kanal (kommandokö) — möjlig senare, inte i scope.
+
+## Panelram (2026-11-08)
+
+Fast band överst i panelläge: logga, kortets namn (scenväljaren) och klocka. Slås på i byggläget "Panelram…" och sparas i `scenes/panelram.json`, som `api/opta_hmi.py` tar med i paketet. I Opta-läge visas Optans klocka (gul vid tidsvarning), i Katapult-läge plattans (appen lägger till `?panel=1`). En logga per Katapult-nod.

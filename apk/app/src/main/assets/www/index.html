@@ -82,13 +82,28 @@
          headern göms som i embed-läget, och letterboxen får temats botten i
          stället för browserns svarta backdrop — även när plattformen bäddat
          in oss med ?bg=clear (regeln står EFTER bgclear och vinner). */
-      html.fs header { display: none; }
-      html.fs #app { grid-template-rows: 1fr; }
+      html.fs body:not(.panelframe) header { display: none; }
+      html.fs body:not(.panelframe) #app { grid-template-rows: 1fr; }
       html.fs, html.fs body, html.fs #stage-wrap { background: #0e1116; }
       html.fs body.light, html.fs body.light #stage-wrap { background: #eef2f0; }
       .stage-paper svg.bg { position: absolute; inset: 0; width: 100%; height: 100%; }
       #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
       .spacer { flex: 1; }
+      /* Panelramen (render/panelFrame.ts): headern blir ett fast band med logga
+         till vänster, kortets namn i mitten och klocka + anslutningsprick till
+         höger. Namnet är scenväljaren, så korten går fortfarande att byta. */
+      #pf-logo, #pf-clock { display: none; }
+      body.panelframe header { position: relative; height: 44px; box-sizing: border-box; padding: 0 14px; }
+      body.panelframe.light header { background: #fff; color: #111; border-bottom-color: #d5dce4; }
+      body.panelframe header strong, body.panelframe #to-platform, body.panelframe #scene-title,
+      body.panelframe #edit-link, body.panelframe #conn-text { display: none; }
+      body.panelframe #pf-logo[src] { display: block; max-height: 36px; max-width: 28vw; object-fit: contain; }
+      body.panelframe #scene-nav { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        max-width: 44vw; padding: 4px 20px 4px 8px; border: none; color: inherit; font: 600 17px system-ui, sans-serif;
+        text-align: center; appearance: none; cursor: pointer;
+        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b97a7'/%3E%3C/svg%3E") no-repeat right 5px center; }
+      body.panelframe #pf-clock { display: inline; margin-right: 6px; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      #pf-clock.warn { color: #d98a00; }
       /* Fel visas som flytande toast — utanför headern så den syns även i
          embed-läget (dold header). Trasig scen i iframe = besked, inte svart. */
       #err { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 300;
@@ -103,20 +118,21 @@
         border-radius: 4px; padding: 3px 10px; font: inherit; text-decoration: none; }
       #edit-link:hover { border-color: #3d4856; background: #1c2430; }
     </style>
-    <script type="module" crossorigin src="/assets/main-BersEU-Y.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/charger-C90Sdj_G.js">
+    <script type="module" crossorigin src="/assets/main-BosEsRbo.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/charger-PWrrfSAG.js">
   </head>
   <body>
     <div id="app">
       <header>
         <button id="to-platform" type="button" title="Tillbaka till plattformen (Alt+←)" hidden>⟵ Plattform</button>
+        <img id="pf-logo" alt="">
         <strong>katapult-scada</strong>
         <select id="building-nav" title="Välj byggnad" hidden></select>
         <select id="scene-nav" title="Välj scen"></select>
         <span id="scene-title">—</span>
         <span class="spacer"></span>
         <a id="edit-link" href="/editor.html" title="Öppna scenen i byggläget (skrivning kräver token)">🔧 Byggläge</a>
-        <span id="conn"><span id="dot"></span><span id="conn-text">ansluter…</span></span>
+        <span id="conn"><span id="pf-clock"></span><span id="dot"></span><span id="conn-text">ansluter…</span></span>
       </header>
       <div id="err"></div>
       <div id="stage-wrap">

@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -251,9 +252,11 @@ class MainActivity : Activity() {
         currentIp = null
         bindTo(null, "Katapult-läge")
         if (url.isEmpty()) { openSettings("Katapult-läge: ange adressen till nodens driftkort."); return }
-        Diag.log("laddar Katapult $url")
+        // panel=1: runtimen visar panelramen om den är påslagen i byggläget.
+        val panelUrl = Uri.parse(url).buildUpon().appendQueryParameter("panel", "1").build().toString()
+        Diag.log("laddar Katapult $panelUrl")
         overlay.visibility = View.GONE
-        web.loadUrl(url)
+        web.loadUrl(panelUrl)
     }
 
     private fun chooseAmong(hits: List<Discovery.Hit>) {
