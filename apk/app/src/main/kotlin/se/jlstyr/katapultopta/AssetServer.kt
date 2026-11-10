@@ -115,7 +115,8 @@ class AssetServer(private val assets: AssetManager) {
 
     /** Larmvakten (Reporter): ett klassiskt skript före runtimens modul lindar
      *  window.fetch och skickar `alarm_a`/`alarm_b` ur runtimens egna
-     *  GET /api/status till appen (KatapultPanel.alarms). Svaret klonas — runtimen
+     *  GET /api/status till appen (KatapultPanel.alarms); varje lyckat svar är
+     *  också självläkningens livstecken (KatapultPanel.alive). Svaret klonas — runtimen
      *  märker inget, och Optan får inga extra anrop. */
     private fun withAlarmTap(html: ByteArray): ByteArray {
         val s = String(html, Charsets.UTF_8)
@@ -128,9 +129,9 @@ class AssetServer(private val assets: AssetManager) {
         const val ALARM_TAP = "<script>(function(){var P=window.KatapultPanel,f=window.fetch;if(!P||!f)return;" +
             "window.fetch=function(u,o){var p=f.apply(this,arguments);try{var s=String(u&&u.url||u);" +
             "if(/\\/api\\/status(\\?|\$)/.test(s)&&!(o&&o.method&&o.method!=='GET')){var h=new URL(s,location.href).host;" +
-            "p.then(function(r){if(r.ok)r.clone().json().then(function(j){" +
+            "p.then(function(r){if(r.ok){P.alive();r.clone().json().then(function(j){" +
             "var a=typeof j.alarm_a==='number'?j.alarm_a:-1,b=typeof j.alarm_b==='number'?j.alarm_b:-1;" +
-            "if(a>=0||b>=0)P.alarms(h,a,b)}).catch(function(){})}).catch(function(){})}}catch(e){}return p}})();</script>\n"
+            "if(a>=0||b>=0)P.alarms(h,a,b)}).catch(function(){})}}).catch(function(){})}}catch(e){}return p}})();</script>\n"
     }
 
     private fun mime(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {

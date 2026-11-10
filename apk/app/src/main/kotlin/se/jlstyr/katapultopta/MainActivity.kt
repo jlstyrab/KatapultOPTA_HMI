@@ -7,10 +7,13 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
@@ -64,6 +67,21 @@ class MainActivity : Activity() {
     private var currentIp: String? = null
     private var currentName: String? = null
     private var boundTo: String = "ingen"
+    private var boundNetwork: Network? = null
+    // Självläkning: senaste svar från Optan (sätts av JS-bryggan) och senaste försök
+    @Volatile private var lastOptaOk = 0L
+    private var lastHeal = 0L
+    private var healing = false
+    private var screenPaused = false   // budet lägger in ett kort i Optan
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private val healNow = Runnable { reconnect("nätet ändrades", true) }
+    private val healTick = object : Runnable {
+        override fun run() {
+            ui.postDelayed(this, HEAL_TICK_MS)
+            val quiet = SystemClock.elapsedRealtime() - lastOptaOk
+            if (quiet >= HEAL_QUIET_MS) reconnect("Optan tyst i ${quiet / 1000} s", false)
+        }
+    }
     private val holdCheck = Runnable {
         if (volDownSince != 0L && System.currentTimeMillis() - volDownSince >= HOLD_MS) {
             volDownSince = 0L
@@ -78,6 +96,11 @@ class MainActivity : Activity() {
         private const val DEFAULT_PIN = "9999"
         private const val MODE_OPTA = "opta"
         private const val MODE_KATAPULT = "katapult"
+        private const val HEAL_TICK_MS = 10_000L
+        private const val HEAL_QUIET_MS = 30_000L    // tyst så länge → sök Optan
+        private const val HEAL_RETRY_MS = 60_000L    // vakten försöker högst så här ofta
+        private const val HEALTHY_MS = 8_000L        // svar nyligen = rör inget (pollning var 3:e s)
+        private const val NET_SETTLE_MS = 3_000L     // låt nätet landa efter en ändring
     }
 
     private fun mode(): String = prefs.getString("mode", MODE_OPTA) ?: MODE_OPTA
@@ -94,8 +117,8 @@ class MainActivity : Activity() {
         // Budet pausar driftkortet under uppladdningen (runtimens pollning
         // släpper Optans sockets) och laddar sedan om det — nya kortet syns direkt.
         courier = Courier(this, reporter, object : Courier.Screen {
-            override fun pause(text: String) { ui.post { if (mode() == MODE_OPTA) showSplash(text) } }
-            override fun resume() { ui.post { if (mode() == MODE_OPTA) currentIp?.let { load(it) } } }
+            override fun pause(text: String) { ui.post { if (mode() == MODE_OPTA) { screenPaused = true; showSplash(text) } } }
+            override fun resume() { ui.post { screenPaused = false; if (mode() == MODE_OPTA) currentIp?.let { load(it) } } }
         })
         reporter.courier = courier
 
@@ -155,6 +178,8 @@ class MainActivity : Activity() {
             if (mode() == MODE_OPTA && ip != null) listOf(ip to (currentName ?: "opta")) else emptyList()
         }
         if (mode() == MODE_KATAPULT) loadKatapult() else { showSplash("Söker Optan…"); connect() }
+        watchNetwork()
+        ui.postDelayed(healTick, HEAL_TICK_MS)
     }
 
     /** JS-bryggan (anropas på WebView:ns tråd). Bara larmräknare — Reporter
@@ -162,6 +187,9 @@ class MainActivity : Activity() {
     private inner class PanelBridge {
         @JavascriptInterface
         fun alarms(host: String, a: Int, b: Int) { reporter.observeAlarms(host, a, b) }
+        /** Optan svarade på runtimens /api/status — vaktens livstecken. */
+        @JavascriptInterface
+        fun alive() { lastOptaOk = SystemClock.elapsedRealtime() }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -227,6 +255,7 @@ class MainActivity : Activity() {
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val ok = cm.bindProcessToNetwork(network)
+            boundNetwork = if (ok) network else null
             boundTo = if (network == null) "ingen" else network.toString()
             Diag.log("nätbindning → $boundTo ($why): ${if (ok) "ok" else "misslyckades"}")
             if (network != null) Thread({
@@ -239,6 +268,7 @@ class MainActivity : Activity() {
 
     private fun load(ip: String) {
         currentIp = ip
+        lastOptaOk = SystemClock.elapsedRealtime()   // sidan får sin tid innan vakten reagerar
         prefs.edit().putString("ip", ip).apply()
         val url = "http://127.0.0.1:${server.port}/?opta=$ip"
         Diag.log("laddar $url")
@@ -257,6 +287,69 @@ class MainActivity : Activity() {
         Diag.log("laddar Katapult $panelUrl")
         overlay.visibility = View.GONE
         web.loadUrl(panelUrl)
+    }
+
+    // ── Självläkning: tappad anslutning till Optan (2026-11-10) ────────────
+    //
+    // Nätbindningen gäller ETT Network-objekt. Dras kabeln ur och i får
+    // anslutningen ett nytt, och processen sitter kvar på det döda: inget
+    // anrop lämnar plattan och en omladdning av sidan hjälper inte. Två vägar
+    // in: nätändringar (snabbt) och vakten (vad som än har hänt). Kortet står
+    // kvar medan appen söker — sidan laddas bara om när Optan hittats.
+
+    private fun watchNetwork() {
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { ui.post { netChanged(false, network) } }
+            override fun onLost(network: Network) { ui.post { netChanged(true, network) } }
+        }
+        try {
+            // Utan INTERNET-kravet: kabeln till Optan saknar ofta väg ut.
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).registerNetworkCallback(req, cb)
+            netCallback = cb
+        } catch (e: Exception) { Diag.log("nätlyssning: ${e.message}") }
+    }
+
+    private fun netChanged(lost: Boolean, network: Network) {
+        if (mode() != MODE_OPTA) return
+        Diag.log("${if (lost) "nät borta" else "nät uppe"}: $network")
+        if (lost && network == boundNetwork) {
+            bindTo(null, "bundna nätet försvann")
+            lastOptaOk = 0L   // räkna inte det gamla svaret som friskt
+        }
+        ui.removeCallbacks(healNow)
+        ui.postDelayed(healNow, NET_SETTLE_MS)
+    }
+
+    /** Sök Optan igen och bind om. Rör inget medan Optan svarar, medan budet
+     *  arbetar eller medan ett försök pågår; vakten försöker högst en gång i
+     *  minuten, en nätändring direkt. */
+    private fun reconnect(why: String, fromNet: Boolean) {
+        val saved = currentIp ?: prefs.getString("ip", null) ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (mode() != MODE_OPTA || screenPaused || healing) return
+        if (now - lastOptaOk < HEALTHY_MS) return
+        if (!fromNet && now - lastHeal < HEAL_RETRY_MS) return
+        healing = true
+        lastHeal = now
+        Diag.log("självläkning: $why")
+        Thread({
+            val hits = try { Discovery.find(this) } catch (e: Exception) { Diag.log("upptäckt kraschade: $e"); emptyList() }
+            val direct = if (hits.isEmpty()) Discovery.ping(saved) else null
+            ui.post {
+                healing = false
+                val hit = hits.firstOrNull { it.ip == saved } ?: hits.singleOrNull() ?: direct
+                when {
+                    hit == null -> Diag.log("självläkning: ingen Opta svarade, försöker igen")
+                    SystemClock.elapsedRealtime() - lastOptaOk < HEALTHY_MS -> Diag.log("självläkning: Optan svarar igen")
+                    else -> { currentName = hit.name; bindFor(hit); load(hit.ip) }
+                }
+            }
+        }, "opta-heal").start()
     }
 
     private fun chooseAmong(hits: List<Discovery.Hit>) {
@@ -523,6 +616,9 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         ui.removeCallbacksAndMessages(null)
+        netCallback?.let { cb ->
+            try { (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(cb) } catch (_: Exception) {}
+        }
         try { server.stop() } catch (_: Exception) {}
         try { web.destroy() } catch (_: Exception) {}
         super.onDestroy()
